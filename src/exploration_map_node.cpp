@@ -18,7 +18,7 @@ namespace value_iteration3 {
 class ExplorationMapNode : public rclcpp::Node {
  public:
   ExplorationMapNode() : rclcpp::Node("exploration_map_node") {
-    options_.free_threshold = declare_parameter<int>("free_threshold", 25);
+    options_.free_threshold = declare_parameter<int>("free_threshold", 49);
     options_.robot_radius = declare_parameter<double>("robot_radius", 0.15);
     options_.safety_margin = declare_parameter<double>("safety_margin", 0.05);
     options_.inflation_radius = declare_parameter<double>("inflation_radius", 0.5);

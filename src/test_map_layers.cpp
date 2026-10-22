@@ -38,6 +38,7 @@ int main() {
   using value_iteration3::process_map_layers;
   MapGeometry geometry{9, 9, 1.0, 12.5, -3.0};
   MapOptions options;
+  options.free_threshold = 25;
   options.robot_radius = 0;
   options.safety_margin = 0;
   options.inflation_radius = 0;
@@ -119,6 +120,15 @@ int main() {
   options = MapOptions{};
   options.unknown_value = 101;
   rejects([&] { process_map_layers(geometry, raw, options); }, "invalid score");
+  raw.assign(81, 35);
+  raw[40] = 50;
+  raw[60] = -1;
+  const auto startup = process_map_layers(geometry, raw);
+  expect(startup.costmap[20] >= 0, "default accepts initial Cartographer free space at 35");
+  expect(startup.costmap[40] == -1 && startup.costmap[60] == -1,
+         "default still blocks ambiguous occupancy and unknown");
+  expect(startup.information_map[20] > 0,
+         "initial free space retains its observation interest");
   std::cout << "map layers: " << failures << " failures\n";
   return failures == 0 ? 0 : 1;
 }

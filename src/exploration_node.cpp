@@ -76,7 +76,7 @@ class ExplorationNode : public rclcpp::Node {
     options_.revisit_radius = declare_parameter<double>("revisit_radius", 0.75);
     options_.revisit_angle_deg = declare_parameter<double>("revisit_angle_deg", 60.0);
     options_.switch_penalty = declare_parameter<double>("switch_penalty", 3.0);
-    options_.free_threshold = declare_parameter<int>("free_threshold", 25);
+    options_.free_threshold = declare_parameter<int>("free_threshold", 49);
     replan_interval_ = declare_parameter<double>("replan_interval", 1.0);
     observation_wait_ = declare_parameter<double>("observation_wait", 1.0);
     revisit_cooldown_ = declare_parameter<double>("revisit_cooldown", 120.0);
@@ -199,8 +199,10 @@ class ExplorationNode : public rclcpp::Node {
       frame = latest_->header.frame_id;
     }
     try {
+      // SLAM's map->odom TF follows the scan. Its dedicated listener can receive
+      // that transform during this bounded wait; do not discard every fresh scan.
       const auto transform = tf_buffer_.lookupTransform(frame, scan.header.frame_id,
-                                                        rclcpp::Time(scan.header.stamp));
+          rclcpp::Time(scan.header.stamp), rclcpp::Duration::from_seconds(0.1));
       const double yaw = tf2::getYaw(transform.transform.rotation);
       const double x = transform.transform.translation.x;
       const double y = transform.transform.translation.y;

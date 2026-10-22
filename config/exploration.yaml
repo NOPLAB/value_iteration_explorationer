@@ -2,7 +2,7 @@
   ros__parameters:
     theta_cell_num: 60
     global_thread_num: 2
-    free_threshold: 25
+    free_threshold: 49
     robot_radius: 0.15
     safety_margin: 0.05
     inflation_radius: 0.5

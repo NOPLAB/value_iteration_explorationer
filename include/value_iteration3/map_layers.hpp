@@ -23,7 +23,7 @@ struct MapGeometry {
 };
 
 struct MapOptions {
-  int free_threshold = 25;
+  int free_threshold = 49;
   double robot_radius = 0.15;
   double safety_margin = 0.05;
   double inflation_radius = 0.5;

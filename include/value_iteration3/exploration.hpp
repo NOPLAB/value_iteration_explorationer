@@ -39,7 +39,7 @@ struct ExplorationOptions {
   double revisit_radius = 0.75;
   double revisit_angle_deg = 60.0;
   double switch_penalty = 3.0;
-  int free_threshold = 25;
+  int free_threshold = 49;
 };
 
 // Raw occupancy controls visibility; inflated costmap controls robot motion.
