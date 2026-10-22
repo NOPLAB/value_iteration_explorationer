@@ -1,0 +1,29 @@
+/**:
+  ros__parameters:
+    theta_cell_num: 60
+    global_thread_num: 2
+    free_threshold: 25
+    robot_radius: 0.15
+    safety_margin: 0.05
+    inflation_radius: 0.5
+    inflation_cost: 30
+    unknown_value: 100
+    ambiguous_value: 100
+    sensor_range: 3.0
+    sensor_fov_deg: 180.0
+    candidate_spacing: 0.3
+    observation_radius: 0.2
+    min_gain: 0.02
+    gain_reference: 1.0
+    information_cost: 30.0
+    revisit_radius: 0.75
+    revisit_angle_deg: 60.0
+    switch_penalty: 3.0
+    replan_interval: 1.0
+    observation_wait: 1.0
+    revisit_cooldown: 120.0
+    progress_timeout: 15.0
+    progress_distance: 0.1
+    input_timeout: 2.0
+    map_timeout: 10.0
+    base_frame: base_link

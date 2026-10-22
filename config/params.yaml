@@ -1,0 +1,33 @@
+/**:
+  ros__parameters:
+    online: true
+    map_type: occupancy  # occupancy, cost_add, or cost_replace
+    global_thread_num: 2
+    theta_cell_num: 60
+    safety_radius: 0.2
+    safety_radius_penalty: 30.0
+    goal_margin_radius: 0.2
+    goal_margin_theta: 10
+    cost_drawing_threshold: 60
+    local_xy_range: 1.0
+
+# Edited here. The length of this list is the number of actions.
+action_list:
+  - name: forward
+    onestep_forward_m: 0.3
+    onestep_rotation_deg: 0.0
+  - name: back
+    onestep_forward_m: -0.2
+    onestep_rotation_deg: 0.0
+  - name: right
+    onestep_forward_m: 0.0
+    onestep_rotation_deg: -20.0
+  - name: rightfw
+    onestep_forward_m: 0.2
+    onestep_rotation_deg: -20.0
+  - name: left
+    onestep_forward_m: 0.0
+    onestep_rotation_deg: 20.0
+  - name: leftfw
+    onestep_forward_m: 0.2
+    onestep_rotation_deg: 20.0
