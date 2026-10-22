@@ -153,7 +153,7 @@ SolveResult LocalPlanner::update(const std::atomic<std::uint32_t> &epoch, std::u
   return field.run(false, epoch, ticket);
 }
 
-LocalPlanner::Command LocalPlanner::command(double x, double y, double yaw) const {
+LocalPlanner::Command LocalPlanner::command(double x, double y, double yaw, bool continuous) const {
   Command command;
   const auto field = planner_.view();
   if (!field || field->resolution <= 0.0) {
@@ -168,7 +168,9 @@ LocalPlanner::Command LocalPlanner::command(double x, double y, double yaw) cons
   const std::size_t cell = field->index(ix, iy, it);
   if (field->final_state[cell]) {
     command.arrived = true;
-    return command;
+    if (!continuous) {
+      return command;
+    }
   }
   const int action = field->action[cell];
   if (action < 0 || static_cast<std::size_t>(action) >= planner_.actions().size()) {

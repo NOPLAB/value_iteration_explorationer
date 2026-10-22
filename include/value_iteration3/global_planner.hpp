@@ -24,7 +24,8 @@ class GlobalPlanner {
   explicit GlobalPlanner(Planner &planner);
 
   void prepare_goal(double x, double y, int yaw_deg);
-  bool prepare_terminals(const std::vector<Terminal> &terminals);
+  // Warm updates keep the published snapshot and unaffected working values.
+  bool prepare_terminals(const std::vector<Terminal> &terminals, bool warm_start = false);
   SolveResult solve(const std::atomic<std::uint32_t> &epoch, std::uint32_t ticket);
 
  private:

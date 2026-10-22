@@ -129,6 +129,136 @@ int main() {
                                     {1, 1, 0, std::numeric_limits<double>::quiet_NaN()}}),
          "invalid terminal list is rejected");
   expect(!planner.view(), "removing terminals invalidates stale policy");
+
+  Planner cold(1);
+  cold.set_actions(planner.actions());
+  cold.set_swept_collision_check(true);
+  GlobalPlanner cold_global(cold);
+  int width = 24, height = 16;
+  double origin_x = 3, origin_y = -2;
+  auto refresh = [&](Planner &target, bool warm) {
+    return target.load_map(width, height, 0.1, origin_x, origin_y, 0, 0, 0, 1,
+                           grid.costmap, 12, 0, 0, 0.4, 30, MapType::CostAdd, warm);
+  };
+  auto compare_cold = [&](const std::string &name) {
+    expect(refresh(cold, false), name + " cold map");
+    cold_global.prepare_terminals(goals);
+    expect(cold_global.solve(epoch, 1).converged, name + " cold solve");
+    const auto warm_view = planner.view();
+    const auto cold_view = cold.view();
+    expect(warm_view && cold_view && warm_view->cost == cold_view->cost &&
+           warm_view->final_state == cold_view->final_state, name + " matches cold field");
+    bool same_policy = true;
+    for (std::size_t i = 0; i < warm_view->action.size(); ++i) {
+      if (!warm_view->final_state[i]) {
+        same_policy = same_policy && warm_view->action[i] == cold_view->action[i];
+      }
+    }
+    expect(same_policy, name + " matches cold nonterminal policy");
+  };
+  expect(refresh(planner, true), "initial warm map");
+  expect(global.prepare_terminals(goals, true), "initial warm terminals");
+  expect(global.solve(epoch, 1).converged, "initial warm solve");
+  LocalPlanner continuous(planner, 1);
+  const auto stop_at_terminal = continuous.command(4.95, -1.25, 0);
+  const auto pass_terminal = continuous.command(4.95, -1.25, 0, true);
+  expect(stop_at_terminal.arrived && !stop_at_terminal.have_action,
+         "legacy commands still stop at terminals");
+  expect(pass_terminal.arrived && pass_terminal.have_action,
+         "continuous commands retain a value-based action at terminals");
+  auto previous = planner.view();
+  expect(refresh(planner, true), "unchanged warm map");
+  expect(global.prepare_terminals(goals, true), "unchanged warm terminals");
+  expect(planner.view() == previous, "snapshot retained during warm preparation");
+  const auto retained = global.solve(epoch, 1);
+  expect(retained.converged && retained.updates == 0, "unchanged refresh retains all values");
+  compare_cold("unchanged refresh");
+
+  for (auto &goal : goals) {
+    if (goal.x == 4) {
+      goal.cost = 20;
+    }
+  }
+  global.prepare_terminals(goals, true);
+  expect(global.solve(epoch, 1).converged, "increased terminal solve");
+  compare_cold("increased terminal");
+  goals.erase(goals.begin() + 1);  // Remove one heading, leaving the others intact.
+  global.prepare_terminals(goals, true);
+  expect(global.solve(epoch, 1).converged, "removed terminal solve");
+  compare_cold("removed terminal");
+
+  grid.costmap[7 * width + 10] = 40;
+  refresh(planner, true);
+  global.prepare_terminals(goals, true);
+  expect(global.solve(epoch, 1).converged, "increased map cost solve");
+  compare_cold("increased map cost");
+  for (int y = 0; y < height; ++y) {
+    grid.costmap[y * width + 12] = -1;
+  }
+  goals.clear();
+  for (int t = 0; t < 12; ++t) {
+    goals.push_back({19, 7, t, 8});
+  }
+  refresh(planner, true);
+  global.prepare_terminals(goals, true);
+  expect(global.solve(epoch, 1).converged, "disconnected former terminal region converges");
+  compare_cold("disconnected former terminal region");
+  expect(planner.view()->cost[planner.view()->index(4, 7, 0)] == Scale::max_cost,
+         "removed terminals do not leave finite orphan cycles");
+
+  previous = planner.view();
+  std::vector<std::int8_t> grown(26 * 18, -1);
+  for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x) {
+      grown[(y + 1) * 26 + x + 1] = grid.costmap[y * width + x];
+    }
+  }
+  grid.costmap = std::move(grown);
+  width = 26;
+  height = 18;
+  origin_x -= 0.1;
+  origin_y -= 0.1;
+  for (auto &goal : goals) {
+    ++goal.x;
+    ++goal.y;
+  }
+  refresh(planner, true);
+  global.prepare_terminals(goals, true);
+  expect(planner.view() == previous, "map growth retains old geometry snapshot until publication");
+  const auto shifted = global.solve(epoch, 1);
+  expect(shifted.converged && shifted.updates == 0,
+         "integer origin shift retains world-aligned field values");
+  compare_cold("map growth and shifted origin");
+  origin_x += 0.025;
+  refresh(planner, true);
+  global.prepare_terminals(goals, true);
+  expect(global.solve(epoch, 1).converged, "fractional origin shift rebuilds working field");
+  compare_cold("fractional origin shift");
+  previous = planner.view();
+  expect(!global.prepare_terminals({}, true), "empty warm terminals reported");
+  expect(planner.view() == previous, "empty warm preparation preserves published snapshot");
+  expect(global.solve(epoch, 1).converged, "empty warm field converges without count-up");
+  bool unreachable = true;
+  for (const auto value : planner.view()->cost) {
+    unreachable = unreachable && value == Scale::max_cost;
+  }
+  expect(unreachable, "empty terminal publication removes all old finite values");
+
+  Planner zero_cost(1);
+  zero_cost.set_actions({{"left", 0, 90}, {"right", 0, -90}});
+  expect(zero_cost.load_map(1, 1, 0.1, 0, 0, 0, 0, 0, 1, {0},
+                           4, 0, 0, 0, 0, MapType::CostReplace, true),
+         "zero-cost cycle map");
+  GlobalPlanner zero_global(zero_cost);
+  zero_global.prepare_terminals({{0, 0, 0, 900000000}}, true);
+  expect(zero_global.solve(epoch, 1).converged, "large finite terminal converges");
+  expect(zero_cost.view()->cost[1] == 900000000ull * Scale::prob_base,
+         "weighted large finite values do not overflow");
+  zero_global.prepare_terminals({}, true);
+  expect(zero_global.solve(epoch, 1).converged, "zero-cost orphan cycle converges");
+  for (const auto value : zero_cost.view()->cost) {
+    expect(value == Scale::max_cost, "zero-cost tied policies invalidate with removed terminal");
+  }
   std::cout << "exploration_test " << (failures == 0 ? "ok" : "failed") << "\n";
   return failures == 0 ? 0 : 1;
 }

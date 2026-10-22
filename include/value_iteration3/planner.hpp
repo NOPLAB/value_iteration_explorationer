@@ -37,7 +37,7 @@ struct Action {
   double rotate_deg;
 };
 
-// Immutable copy of a finished field. Safe to read without the planner lock.
+// Immutable field snapshot. Safe to read while the worker continues sweeping.
 struct View {
   int nx = 0;
   int ny = 0;
@@ -81,12 +81,15 @@ class Planner {
   // Exploration additionally checks the swept translation, not just its successors.
   void set_swept_collision_check(bool enabled) { swept_collision_check_ = enabled; }
 
+  // Warm mode retains the last view and world-aligned values. Follow with
+  // prepare_terminals(..., true) and solve(); mutating calls share one worker.
+  // Different resolution/headings or noninteger origin shifts start cold.
   bool load_map(int width, int height, double resolution, double origin_x,
                 double origin_y, double qx, double qy, double qz, double qw,
                 const std::vector<std::int8_t> &occupancy, int theta_cells,
                 double safety_radius, double safety_penalty,
                 double goal_margin_radius, int goal_margin_theta_deg,
-                MapType map_type = MapType::Occupancy);
+                MapType map_type = MapType::Occupancy, bool warm_start = false);
 
   std::shared_ptr<const View> view() const;
   const std::vector<Action> &actions() const { return actions_; }
@@ -106,6 +109,8 @@ class Planner {
   void allocate_field();
   void fill_cp(std::uint64_t value);
   void zero_masks();
+  // Discard affected values and their old policy predecessors before an increase.
+  void invalidate_dependents(const std::vector<std::size_t> &seeds);
   std::vector<std::pair<int, int>> dilate(
       const std::vector<std::pair<int, int>> &cells) const;
   std::uint64_t action_cost(int action, int theta, std::int64_t col) const;
@@ -156,6 +161,7 @@ class Planner {
   bool map_ready_ = false;
   bool goal_set_ = false;
   bool field_ready_ = false;
+  bool warm_start_ = false;
 
   std::vector<std::uint8_t> free_;
   std::vector<std::uint64_t> static_pen_;

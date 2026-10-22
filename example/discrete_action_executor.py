@@ -6,16 +6,17 @@
 
 import math
 import signal
+import threading
 from typing import NamedTuple
 
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 import rclpy
 from rclpy.duration import Duration
+from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.signals import SignalHandlerOptions
-from rclpy.task import Future
 from sensor_msgs.msg import LaserScan
 
 
@@ -147,17 +148,22 @@ class ActionExecutor(Node):
 def main() -> None:
     rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
     node = ActionExecutor()
-    stopped = Future()
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
+    stopped = threading.Event()
 
     def stop(signum, frame) -> None:
-        if not stopped.done():
-            stopped.set_result(True)
+        stopped.set()
 
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
+    worker = threading.Thread(target=executor.spin)
+    worker.start()
     try:
-        rclpy.spin_until_future_complete(node, stopped)
+        stopped.wait()
     finally:
+        executor.shutdown()
+        worker.join()
         node.output.publish(Twist())
         acknowledged = node.output.wait_for_all_acked(Duration(seconds=1))
         node.destroy_node()

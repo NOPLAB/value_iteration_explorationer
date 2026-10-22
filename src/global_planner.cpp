@@ -61,6 +61,7 @@ void GlobalPlanner::prepare_goal(double x, double y, int yaw_deg) {
     field.view_.reset();
   }
   field.field_ready_ = false;
+  field.warm_start_ = false;
   field.goal_set_ = true;
 
   field.for_rows([this, &field](int y0, int y1) {
@@ -93,11 +94,63 @@ void GlobalPlanner::prepare_goal(double x, double y, int yaw_deg) {
   field.log(text.str());
 }
 
-bool GlobalPlanner::prepare_terminals(const std::vector<Terminal> &terminals) {
+bool GlobalPlanner::prepare_terminals(const std::vector<Terminal> &terminals, bool warm_start) {
   Planner &field = planner_;
   if (!field.map_ready_) {
     return false;
   }
+  if (warm_start) {
+    std::vector<std::uint64_t> costs(field.final_.size(), kUnreached);
+    for (const auto &terminal : terminals) {
+      if (terminal.x < 0 || terminal.x >= field.nx_ || terminal.y < 0 ||
+          terminal.y >= field.ny_ || terminal.heading < 0 || terminal.heading >= field.nt_ ||
+          !std::isfinite(terminal.cost) || terminal.cost < 0 || terminal.cost >= 1e9 ||
+          !field.free_[static_cast<std::size_t>(terminal.y) * field.nx_ + terminal.x]) {
+        continue;
+      }
+      const auto index = field.index_of(terminal.x, terminal.y, terminal.heading);
+      costs[index] = std::min(costs[index],
+          static_cast<std::uint64_t>(terminal.cost * Scale::prob_base));
+    }
+    std::vector<std::size_t> seeds;
+    for (int y = 0; y < field.ny_; ++y) {
+      for (int x = 0; x < field.nx_; ++x) {
+        for (int t = 0; t < field.nt_; ++t) {
+          const auto index = field.index_of(x, y, t);
+          const auto pad = static_cast<std::size_t>(field.pad_col(x, y) + t);
+          const auto old = field.cp_[pad].load(std::memory_order_relaxed);
+          if ((field.final_[index] && costs[index] == kUnreached) ||
+              (costs[index] != kUnreached && old != kUnreached &&
+               costs[index] + field.pen_[pad] > old)) {
+            seeds.push_back(pad);
+          }
+        }
+      }
+    }
+    field.invalidate_dependents(seeds);
+    field.goal_set_ = false;
+    for (int y = 0; y < field.ny_; ++y) {
+      for (int x = 0; x < field.nx_; ++x) {
+        const auto xy = static_cast<std::size_t>(y) * field.nx_ + x;
+        for (int t = 0; t < field.nt_; ++t) {
+          const auto index = field.index_of(x, y, t);
+          const auto pad = static_cast<std::size_t>(field.pad_col(x, y) + t);
+          const bool terminal = costs[index] != kUnreached;
+          field.final_[index] = terminal;
+          field.pen_[pad] = field.free_[xy] ? field.static_pen_[xy] + field.local_[xy] : 0;
+          field.eval_ok_[pad] = field.free_[xy] && !terminal;
+          if (terminal) {
+            field.cp_[pad].store(costs[index] + field.pen_[pad], std::memory_order_relaxed);
+            field.goal_set_ = true;
+          }
+        }
+      }
+    }
+    field.field_ready_ = false;
+    field.warm_start_ = true;
+    return field.goal_set_;
+  }
+  field.warm_start_ = false;
   std::fill(field.local_.begin(), field.local_.end(), 0);
   std::fill(field.dirty_.begin(), field.dirty_.end(), 0);
   std::fill(field.final_.begin(), field.final_.end(), 0);
@@ -147,7 +200,7 @@ bool GlobalPlanner::prepare_terminals(const std::vector<Terminal> &terminals) {
 
 SolveResult GlobalPlanner::solve(const std::atomic<std::uint32_t> &epoch, std::uint32_t ticket) {
   Planner &field = planner_;
-  if (!field.goal_set_) {
+  if (!field.goal_set_ && !field.warm_start_) {
     return {};
   }
   field.zero_masks();
@@ -156,7 +209,7 @@ SolveResult GlobalPlanner::solve(const std::atomic<std::uint32_t> &epoch, std::u
   for (int iy = 0; iy < field.ny_; ++iy) {
     for (int ix = 0; ix < field.nx_; ++ix) {
       for (int it = 0; it < field.nt_; ++it) {
-        if (field.final_[field.index_of(ix, iy, it)]) {
+        if (field.warm_start_ || field.final_[field.index_of(ix, iy, it)]) {
           seeds.emplace_back(ix, iy);
           break;
         }

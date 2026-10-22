@@ -347,11 +347,59 @@ void Planner::allocate_field() {
   zero_masks();
 }
 
+void Planner::invalidate_dependents(const std::vector<std::size_t> &seeds) {
+  if (seeds.empty()) {
+    return;
+  }
+  // A retained value must still have its old policy available. Invalidate the
+  // reverse closure BEFORE changing costs/terminals, while that policy is known.
+  // Unlike repeated upward Bellman backups, this also handles orphaned cycles.
+  std::vector<std::vector<std::size_t>> predecessors(n_pad_);
+  for (int y = 0; y < ny_; ++y) {
+    for (int x = 0; x < nx_; ++x) {
+      const auto column = pad_col(x, y);
+      for (int t = 0; t < nt_; ++t) {
+        const auto pad = static_cast<std::size_t>(column + t);
+        if (!eval_ok_[pad] || cp_[pad].load() == kUnreached) {
+          continue;
+        }
+        const auto value = cp_[pad].load(std::memory_order_relaxed);
+        const auto bound = value - pen_[pad];
+        for (std::size_t a = 0; a < actions_.size(); ++a) {
+          const auto cost = action_cost(static_cast<int>(a), t, column);
+          // Include ties, not just the published action: a zero-cost cycle
+          // can tie the route that originally connected it to a terminal.
+          if (cost < Scale::max_cost && cost <= bound) {
+            for (const auto &bucket : transitions_[a][t]) {
+              predecessors[static_cast<std::size_t>(column + bucket.offset)].push_back(pad);
+            }
+          }
+        }
+      }
+    }
+  }
+  std::vector<std::uint8_t> invalid(n_pad_, 0);
+  std::vector<std::size_t> queue = seeds;
+  for (const auto pad : seeds) {
+    invalid[pad] = 1;
+  }
+  for (std::size_t i = 0; i < queue.size(); ++i) {
+    const auto pad = queue[i];
+    cp_[pad].store(kUnreached, std::memory_order_relaxed);
+    for (const auto predecessor : predecessors[pad]) {
+      if (!invalid[predecessor]) {
+        invalid[predecessor] = 1;
+        queue.push_back(predecessor);
+      }
+    }
+  }
+}
+
 bool Planner::load_map(int width, int height, double resolution, double origin_x, double origin_y,
                        double qx, double qy, double qz, double qw,
                        const std::vector<std::int8_t> &occupancy, int theta_cells,
                        double safety_radius, double safety_penalty, double goal_margin_radius,
-                       int goal_margin_theta_deg, MapType map_type) {
+                       int goal_margin_theta_deg, MapType map_type, bool warm_start) {
   if (width <= 0 || height <= 0 || resolution < 0.0001 || theta_cells <= 0 || theta_cells > 64) {
     return false;
   }
@@ -362,6 +410,97 @@ bool Planner::load_map(int width, int height, double resolution, double origin_x
     return false;
   }
 
+  std::vector<std::uint8_t> new_free(static_cast<std::size_t>(width) * height, 0);
+  std::vector<std::uint64_t> new_pen(new_free.size(), 0);
+  const int margin = static_cast<int>(std::ceil(safety_radius / resolution));
+  for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x) {
+      const auto xy = static_cast<std::size_t>(y) * width + x;
+      if (map_type != MapType::Occupancy) {
+        const auto cost = static_cast<std::uint8_t>(occupancy[xy]);
+        new_free[xy] = cost != 255;
+        const auto base = map_type == MapType::CostAdd ? Scale::prob_base : 0;
+        new_pen[xy] = new_free[xy] ? base + cost * Scale::prob_base : 0;
+      } else if (occupancy[xy] == 0) {
+        new_free[xy] = 1;
+        new_pen[xy] = Scale::prob_base;
+        for (int ix = x - margin; ix <= x + margin; ++ix) {
+          for (int iy = y - margin; iy <= y + margin; ++iy) {
+            const long pos = static_cast<long>(iy) * width + ix;
+            if (pos >= 0 && pos < static_cast<long>(occupancy.size()) && occupancy[pos] != 0) {
+              new_pen[xy] = static_cast<std::uint64_t>(safety_penalty * Scale::prob_base) +
+                            Scale::prob_base;
+            }
+          }
+        }
+      }
+    }
+  }
+  const double dx = map_ready_ ? (origin_x_ - origin_x) / resolution : 0;
+  const double dy = map_ready_ ? (origin_y_ - origin_y) / resolution : 0;
+  const bool aligned = warm_start && map_ready_ && resolution == resolution_ &&
+      theta_cells == nt_ && qx == origin_qx_ && qy == origin_qy_ &&
+      qz == origin_qz_ && qw == origin_qw_ && qx == 0 && qy == 0 && qz == 0 &&
+      std::fabs(dx - std::round(dx)) < 1e-6 && std::fabs(dy - std::round(dy)) < 1e-6 &&
+      std::fabs(dx) < 1e9 && std::fabs(dy) < 1e9;
+  std::vector<std::uint64_t> retained;
+  std::vector<std::uint8_t> retained_final;
+  if (aligned) {
+    const int sx = static_cast<int>(std::round(dx));
+    const int sy = static_cast<int>(std::round(dy));
+    std::vector<std::size_t> seeds;
+    for (int y = 0; y < ny_; ++y) {
+      for (int x = 0; x < nx_; ++x) {
+        const int xx = x + sx, yy = y + sy;
+        bool invalid = xx < 0 || yy < 0 || xx >= width || yy >= height;
+        if (!invalid) {
+          const auto target = static_cast<std::size_t>(yy) * width + xx;
+          invalid = !new_free[target] || new_pen[target] > static_pen_[y * nx_ + x];
+        }
+        // A new obstacle can invalidate an action's swept path without being
+        // one of its stochastic endpoints. Conservatively seed its footprint.
+        if (!invalid && swept_collision_check_) {
+          for (int oy = std::max(0, y - my_); oy <= std::min(ny_ - 1, y + my_); ++oy) {
+            for (int ox = std::max(0, x - mx_); ox <= std::min(nx_ - 1, x + mx_); ++ox) {
+              const int tx = ox + sx, ty = oy + sy;
+              if (free_[oy * nx_ + ox] &&
+                  (tx < 0 || ty < 0 || tx >= width || ty >= height ||
+                   !new_free[static_cast<std::size_t>(ty) * width + tx])) {
+                invalid = true;
+              }
+            }
+          }
+        }
+        if (invalid && free_[static_cast<std::size_t>(y) * nx_ + x]) {
+          for (int t = 0; t < nt_; ++t) {
+            seeds.push_back(static_cast<std::size_t>(pad_col(x, y) + t));
+          }
+        }
+      }
+    }
+    invalidate_dependents(seeds);
+    retained.assign(new_free.size() * nt_, kUnreached);
+    retained_final.assign(retained.size(), 0);
+    for (int y = 0; y < ny_; ++y) {
+      for (int x = 0; x < nx_; ++x) {
+        const int xx = x + sx, yy = y + sy;
+        if (xx < 0 || yy < 0 || xx >= width || yy >= height) {
+          continue;
+        }
+        const auto target = static_cast<std::size_t>(yy) * width + xx;
+        if (!new_free[target]) {
+          continue;
+        }
+        for (int t = 0; t < nt_; ++t) {
+          const auto pad = static_cast<std::size_t>(pad_col(x, y) + t);
+          const auto value = cp_[pad].load(std::memory_order_relaxed);
+          retained[target * nt_ + t] =
+              value == kUnreached ? kUnreached : value - pen_[pad] + new_pen[target];
+          retained_final[target * nt_ + t] = final_[index_of(x, y, t)];
+        }
+      }
+    }
+  }
   const bool reuse_transitions =
       map_ready_ && width == nx_ && height == ny_ && resolution == resolution_ && theta_cells == nt_;
   nx_ = width;
@@ -380,43 +519,29 @@ bool Planner::load_map(int width, int height, double resolution, double origin_x
   map_ready_ = false;
   goal_set_ = false;
   field_ready_ = false;
+  warm_start_ = warm_start;
 
-  const std::size_t cells = static_cast<std::size_t>(nx_) * ny_;
-  free_.assign(cells, 0);
-  static_pen_.assign(cells, 0);
-  const int margin = static_cast<int>(std::ceil(safety_radius / resolution_));
-  for (int y = 0; y < ny_; ++y) {
-    for (int x = 0; x < nx_; ++x) {
-      const std::size_t xy = static_cast<std::size_t>(x) + static_cast<std::size_t>(y) * nx_;
-      if (map_type != MapType::Occupancy) {
-        const auto cost = static_cast<std::uint8_t>(occupancy[xy]);
-        free_[xy] = cost != 255;
-        const std::uint64_t base = map_type == MapType::CostAdd ? Scale::prob_base : 0;
-        static_pen_[xy] =
-            free_[xy] ? base + static_cast<std::uint64_t>(cost) * Scale::prob_base : 0;
-        continue;
-      }
-      if (occupancy[xy] != 0) {
-        continue;
-      }
-      free_[xy] = 1;
-      std::uint64_t penalty = Scale::prob_base;
-      for (int ix = x - margin; ix <= x + margin; ++ix) {
-        for (int iy = y - margin; iy <= y + margin; ++iy) {
-          const long pos = static_cast<long>(iy) * nx_ + ix;
-          if (pos >= 0 && pos < static_cast<long>(occupancy.size()) && occupancy[pos] != 0) {
-            penalty = static_cast<std::uint64_t>(safety_penalty * Scale::prob_base) + Scale::prob_base;
-          }
-        }
-      }
-      static_pen_[xy] = penalty;
-    }
-  }
+  free_ = std::move(new_free);
+  static_pen_ = std::move(new_pen);
 
   if (!reuse_transitions) {
     build_transitions();
   }
   allocate_field();
+  if (aligned) {
+    final_ = std::move(retained_final);
+    for (int y = 0; y < ny_; ++y) {
+      for (int x = 0; x < nx_; ++x) {
+        const auto xy = static_cast<std::size_t>(y) * nx_ + x;
+        for (int t = 0; t < nt_; ++t) {
+          const auto pad = static_cast<std::size_t>(pad_col(x, y) + t);
+          pen_[pad] = static_pen_[xy];
+          eval_ok_[pad] = free_[xy] && !final_[index_of(x, y, t)];
+          cp_[pad].store(retained[index_of(x, y, t)], std::memory_order_relaxed);
+        }
+      }
+    }
+  }
   map_ready_ = true;
   std::ostringstream text;
   text << "map " << nx_ << "x" << ny_ << "x" << nt_ << " threads " << thread_num_;
@@ -487,15 +612,17 @@ std::uint64_t Planner::action_cost(int action, int theta, std::int64_t column) c
     }
   }
   std::uint64_t cost = 0;
+  std::uint64_t remainder = 0;
   for (const Bucket &bucket : transitions_[action][theta]) {
     const std::uint64_t value =
         cp_[static_cast<std::size_t>(column + bucket.offset)].load(std::memory_order_relaxed);
-    if (value == kUnreached) {
+    if (value >= Scale::max_cost) {
       return Scale::max_cost;
     }
-    cost += value * bucket.prob;
+    cost += (value >> Scale::prob_base_bit) * bucket.prob;
+    remainder += (value & (Scale::prob_base - 1)) * bucket.prob;
   }
-  return cost >> Scale::prob_base_bit;
+  return cost + (remainder >> Scale::prob_base_bit);
 }
 
 std::uint64_t Planner::compute_phase(int worker, bool all_headings) {
@@ -598,7 +725,7 @@ void Planner::publish() {
             continue;
           }
           view->cost[orig] = stored - pen_[pad];
-          if (!eval_ok_[pad]) {
+          if (!eval_ok_[pad] && !(warm_start_ && final_[orig])) {
             continue;
           }
           std::uint64_t best = Scale::max_cost;
@@ -653,6 +780,7 @@ SolveResult Planner::run(bool all_headings_first, const std::atomic<std::uint32_
   SolveResult result;
   const auto started = std::chrono::steady_clock::now();
   auto next_log = started + std::chrono::seconds(2);
+  auto next_publish = started + std::chrono::milliseconds(100);
   std::uint32_t iter = 0;
   for (;;) {
     const std::uint64_t ups = compute_phase(0, all_headings_first && iter == 0);
@@ -688,6 +816,11 @@ SolveResult Planner::run(bool all_headings_first, const std::atomic<std::uint32_
     }
 
     const bool stop = cancelled(epoch, ticket) || !any || iter >= kMaxRounds;
+    if (warm_start_ && !stop && now >= next_publish) {
+      // Workers are parked at the barrier: publish a coherent immutable copy.
+      publish();
+      next_publish = now + std::chrono::milliseconds(100);
+    }
     if (!stop) {
       candidates_ = dilate(touched);
       if (iter % 2 == 1) {

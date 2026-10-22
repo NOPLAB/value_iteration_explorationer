@@ -42,7 +42,8 @@ class LocalPlanner {
   bool apply_scan(const std::vector<float> &ranges, float angle_min, float angle_increment,
                   float range_min, float range_max, double x, double y, double yaw);
   SolveResult update(const std::atomic<std::uint32_t> &epoch, std::uint32_t ticket);
-  Command command(double x, double y, double yaw) const;
+  // Continuous exploration selects an action even at an observation terminal.
+  Command command(double x, double y, double yaw, bool continuous = false) const;
 
  private:
   void set_window(double x, double y);

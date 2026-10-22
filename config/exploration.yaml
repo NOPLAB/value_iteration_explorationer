@@ -20,7 +20,6 @@
     revisit_angle_deg: 60.0
     switch_penalty: 3.0
     replan_interval: 1.0
-    observation_wait: 1.0
     revisit_cooldown: 120.0
     progress_timeout: 15.0
     progress_distance: 0.1

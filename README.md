@@ -48,16 +48,26 @@ goal margins do, to accommodate stochastic successor cells. This is a local
 approximation to observation gain over that region.
 
 Recent observation poses are suppressed within `revisit_radius` and
-`revisit_angle_deg` for `revisit_cooldown` seconds. On arrival, the robot stops
-for at least `observation_wait` and waits for a new map before replanning.
+`revisit_angle_deg` for `revisit_cooldown` seconds. Observations are recorded
+while moving; arrival does not start a timed observation stop or wait for a map.
+Exploration also selects a value-based action at an observation terminal, so
+reaching one only updates observation history and does not itself emit a stop.
 Lack of translation or rotation for `progress_timeout` suppresses the current
 target and requests another plan. `switch_penalty` favors the previous target
 when nominal rollout identifies one. History is bounded to 256 observations.
 `no_candidates` does not claim the entire environment is mapped; cooldowns,
 visibility limits, or disconnected space can leave unexplored regions.
 
-Map updates are coalesced, not queued. Global replanning is rate-limited by
-`replan_interval`; it resets the field, including newly free cells. Transition
+Map updates are coalesced, not queued. The value field is refreshed every
+`replan_interval`, including when no new map or arrival event occurs. Actions
+continue from the latest immutable field snapshot while the worker updates it;
+each action is checked against the newest costmap and scan. Working values are
+retained across aligned map updates, including integer-cell origin shifts and
+map growth. Added obstacles, increased costs and removed observation terminals
+invalidate their old dependent values before propagation. A changed resolution
+or non-aligned origin requires rebuilding the working raster; its old snapshot
+remains readable until the replacement is published. Long updates publish an
+intermediate snapshot between sweeps every 100 ms. Transition
 tables are reused when raster geometry is unchanged. Swept translations are
 checked in exploration mode so an action cannot jump over blocked cells.
 Fresh scans update the original local penalties and independently veto unsafe
