@@ -2,6 +2,7 @@
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
@@ -25,6 +26,15 @@ def generate_launch_description():
         DeclareLaunchArgument('map_resolution', default_value='0.05'),
         DeclareLaunchArgument('map_publish_period_sec', default_value='1.0'),
         DeclareLaunchArgument('action_topic', default_value='/exploration/action'),
+        DeclareLaunchArgument('execute_actions', default_value='false'),
+        DeclareLaunchArgument('odom_topic', default_value='/odom'),
+        DeclareLaunchArgument('cmd_vel_topic', default_value='/cmd_vel'),
+        DeclareLaunchArgument('use_rviz', default_value='true'),
+        DeclareLaunchArgument(
+            'rviz_config',
+            default_value=PathJoinSubstitution([
+                package_share, 'example', 'exploration.rviz',
+            ])),
         DeclareLaunchArgument(
             'params_file',
             default_value=PathJoinSubstitution([
@@ -65,5 +75,27 @@ def generate_launch_description():
                 'action_topic': LaunchConfiguration('action_topic'),
                 'params_file': LaunchConfiguration('params_file'),
             }.items(),
+        ),
+        Node(
+            package='rviz2',
+            executable='rviz2',
+            name='exploration_rviz',
+            arguments=['-d', LaunchConfiguration('rviz_config')],
+            parameters=[{'use_sim_time': use_sim_time}],
+            condition=IfCondition(LaunchConfiguration('use_rviz')),
+            output='screen',
+        ),
+        Node(
+            package='value_iteration_explorationer',
+            executable='example_action_executor',
+            parameters=[{
+                'use_sim_time': use_sim_time,
+                'action_topic': LaunchConfiguration('action_topic'),
+                'odom_topic': LaunchConfiguration('odom_topic'),
+                'scan_topic': scan_topic,
+                'cmd_vel_topic': LaunchConfiguration('cmd_vel_topic'),
+            }],
+            condition=IfCondition(LaunchConfiguration('execute_actions')),
+            output='screen',
         ),
     ])

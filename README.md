@@ -27,6 +27,9 @@ base cost. **100 is traversable, not a lethal-cost sentinel.** The map producer
 blocks unknown cells and cells above `free_threshold`, inflates them by
 `robot_radius + safety_margin`, and adds soft clearance costs. The robot is
 modeled as a circle; map exterior also constrains its footprint.
+The default `free_threshold` is 49. Initial online Cartographer maps can have
+free cells around 35 rather than 0; the earlier threshold of 25 blocked every
+free cell in the TurtleBot3 smoke run. Values 50 and above remain blocked.
 
 The information map is separate: `0..100` is observation interest, not movement
 cost. Unknown cells receive `unknown_value`. Known cells receive
@@ -60,6 +63,8 @@ checked in exploration mode so an action cannot jump over blocked cells.
 Fresh scans update the original local penalties and independently veto unsafe
 actions. Missing/stale TF, scans, or map stop action output. Inflation and scan
 checks use the same circular footprint parameters.
+Scan-time TF lookup waits up to 0.1 seconds for the SLAM transform to arrive,
+instead of discarding fresh scans whose transform follows by a few milliseconds.
 
 Two map topics are published for inspection, but the planner consumes only
 `ExplorationMap` on `/exploration/map_layers` so it cannot mix revisions.
@@ -106,6 +111,18 @@ both Cartographer and its occupancy-grid node. Sensors, robot TF and any odometr
 required by that Lua configuration must already be running. Optional arguments
 include `map_resolution`, `map_publish_period_sec`, `params_file`, and
 `action_topic`. It does not invent a robot sensor configuration.
+This example also starts RViz with `example/exploration.rviz`: map, robot, scan,
+and policy rollout are visible; the two derived maps, value field and candidates
+can be toggled in Displays. Set `use_rviz:=false` for headless use, or pass
+`rviz_config:=/absolute/path/to/your.rviz`. The regular exploration launch does
+not start RViz.
+For simulation, `execute_actions:=true use_sim_time:=true` starts the optional
+`example_action_executor`. It uses `/odom` feedback to execute each translation
+then rotation, limits velocities, and stops on zero/stale actions, stale odometry
+or scan, or insufficient laser clearance. It continues accepting actions after
+each step; there is no measurement-success auto-stop. `odom_topic` and
+`cmd_vel_topic` are configurable. This executor is simulator-only and is off by
+default; a real robot still needs its own compatible controller.
 
 ### Tests and retained code
 

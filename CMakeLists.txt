@@ -68,6 +68,9 @@ endforeach()
 install(TARGETS vi_node exploration_map_node exploration_node DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 install(FILES example/cartographer_exploration.launch.py DESTINATION share/${PROJECT_NAME}/launch)
+install(FILES example/exploration.rviz DESTINATION share/${PROJECT_NAME}/example)
+install(PROGRAMS example/discrete_action_executor.py
+  DESTINATION lib/${PROJECT_NAME} RENAME example_action_executor)
 
 if(BUILD_TESTING)
   find_package(ament_cmake_test REQUIRED)
@@ -84,6 +87,8 @@ if(BUILD_TESTING)
       GENERATE_RESULT_FOR_RETURN_CODE_ZERO TIMEOUT 180)
   endforeach()
   ament_add_pytest_test(exploration_ros_test test/test_exploration_ros.py TIMEOUT 120)
+  ament_add_pytest_test(action_executor_test test/test_action_executor.py
+    APPEND_ENV "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/example" TIMEOUT 30)
   # Ubuntu 22.04 ships cppcheck 2.7; run its analysis rather than skip it.
   ament_cppcheck()
   set_tests_properties(cppcheck PROPERTIES

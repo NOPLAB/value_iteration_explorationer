@@ -1,0 +1,153 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 1
+      Plane Cell Count: 20
+      Color: 100; 100; 100
+      Alpha: 0.25
+      Reference Frame: <Fixed Frame>
+    - Class: rviz_default_plugins/Map
+      Name: Cartographer map
+      Enabled: true
+      Alpha: 1
+      Color Scheme: map
+      Draw Behind: true
+      Topic:
+        Value: /map
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Depth: 1
+    - Class: rviz_default_plugins/Map
+      Name: Movement costmap
+      Enabled: false
+      Alpha: 0.8
+      Color Scheme: costmap
+      Draw Behind: false
+      Topic:
+        Value: /exploration/costmap
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Depth: 1
+    - Class: rviz_default_plugins/Map
+      Name: Information value
+      Enabled: false
+      Alpha: 0.8
+      Color Scheme: costmap
+      Draw Behind: false
+      Topic:
+        Value: /exploration/information_map
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Depth: 1
+    - Class: rviz_default_plugins/Map
+      Name: Value function
+      Enabled: false
+      Alpha: 0.8
+      Color Scheme: costmap
+      Draw Behind: false
+      Topic:
+        Value: /value_function
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Depth: 1
+    - Class: rviz_default_plugins/Path
+      Name: Policy rollout
+      Enabled: true
+      Color: 40; 230; 120
+      Alpha: 1
+      Line Style: Billboards
+      Line Width: 0.045
+      Pose Style: None
+      Buffer Length: 1
+      Topic:
+        Value: /exploration/path
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Depth: 1
+    - Class: rviz_default_plugins/PoseArray
+      Name: Observation candidates
+      Enabled: false
+      Color: 210; 90; 255
+      Alpha: 0.6
+      Shape: Arrow (Flat)
+      Arrow Length: 0.1
+      Topic:
+        Value: /exploration/candidates
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Depth: 1
+    - Class: rviz_default_plugins/LaserScan
+      Name: Laser scan
+      Enabled: true
+      Color: 255; 80; 70
+      Color Transformer: FlatColor
+      Position Transformer: XYZ
+      Style: Points
+      Size (Pixels): 3
+      Size (m): 0.025
+      Decay Time: 0
+      Topic:
+        Value: /scan
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Depth: 5
+    - Class: rviz_default_plugins/RobotModel
+      Name: Robot
+      Enabled: true
+      Alpha: 1
+      Visual Enabled: true
+      Collision Enabled: false
+      Description Source: Topic
+      Description Topic:
+        Value: /robot_description
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Depth: 1
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: false
+      Show Names: true
+      Show Axes: true
+      Show Arrows: true
+      Marker Scale: 0.3
+  Global Options:
+    Fixed Frame: map
+    Background Color: 40; 43; 48
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Name: Current View
+      Target Frame: <Fixed Frame>
+      Scale: 80
+      Angle: 0
+      X: 0
+      Y: 0
+      Near Clip Distance: 0.01
+Window Geometry:
+  Width: 1280
+  Height: 900
+  Hide Left Dock: false
+  Hide Right Dock: true
