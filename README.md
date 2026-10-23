@@ -1,9 +1,9 @@
 # value_iteration_explorationer
 
-Exploration fork copied from `../value_iteration3_cpp`. The original project is
-not modified. Header paths and the `value_iteration3` C++ namespace are retained
-to keep the diff small. The action parser, local planner, original solver tests,
-and goal-driven node remain; exploration uses the same solver and `cost_add`.
+Exploration fork of [NOPLAB/value_iteration3_cpp](https://github.com/NOPLAB/value_iteration3_cpp).
+Header paths and the `value_iteration3` C++ namespace are retained from upstream.
+The action parser, local planner, original solver tests, and goal-driven node
+remain; exploration uses the same solver and `cost_add`.
 
 ## Exploration
 
@@ -28,8 +28,8 @@ blocks unknown cells and cells above `free_threshold`, inflates them by
 `robot_radius + safety_margin`, and adds soft clearance costs. The robot is
 modeled as a circle; map exterior also constrains its footprint.
 The default `free_threshold` is 49. Initial online Cartographer maps can have
-free cells around 35 rather than 0; the earlier threshold of 25 blocked every
-free cell in the TurtleBot3 smoke run. Values 50 and above remain blocked.
+free cells around 35 rather than 0, so a threshold of 25 can block free space.
+Values 50 and above remain blocked.
 
 The information map is separate: `0..100` is observation interest, not movement
 cost. Unknown cells receive `unknown_value`. Known cells receive
