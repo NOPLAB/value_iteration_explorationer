@@ -21,6 +21,7 @@
 
 #include "ament_index_cpp/get_package_share_directory.hpp"
 #include "geometry_msgs/msg/pose_array.hpp"
+#include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -77,6 +78,9 @@ class ExplorationNode : public rclcpp::Node {
     options_.revisit_angle_deg = declare_parameter<double>("revisit_angle_deg", 60.0);
     options_.switch_penalty = declare_parameter<double>("switch_penalty", 3.0);
     options_.free_threshold = declare_parameter<int>("free_threshold", 49);
+    goal_options_.radius = declare_parameter<double>("goal_margin_radius", 0.3);
+    goal_options_.angle_deg = declare_parameter<double>("goal_margin_theta", 10.0);
+    goal_options_.cost_per_meter = declare_parameter<double>("goal_cost_per_meter", 1.0 / 0.3);
     replan_interval_ = declare_parameter<double>("replan_interval", 1.0);
     revisit_cooldown_ = declare_parameter<double>("revisit_cooldown", 120.0);
     progress_timeout_ = declare_parameter<double>("progress_timeout", 15.0);
@@ -115,6 +119,9 @@ class ExplorationNode : public rclcpp::Node {
     sub_scan_ = create_subscription<sensor_msgs::msg::LaserScan>(
         "/scan", rclcpp::SensorDataQoS(),
         [this](sensor_msgs::msg::LaserScan::ConstSharedPtr scan) { on_scan(*scan); });
+    sub_goal_ = create_subscription<geometry_msgs::msg::PoseStamped>(
+        "/goal_pose", 10,
+        [this](geometry_msgs::msg::PoseStamped::ConstSharedPtr goal) { on_goal(*goal); });
     timer_ = create_wall_timer(std::chrono::milliseconds(100), [this] { on_decision(); });
     status("waiting_input");
     worker_ = std::thread([this] { worker_main(); });
@@ -137,7 +144,8 @@ class ExplorationNode : public rclcpp::Node {
         options_.observation_radius,
         options_.min_gain, options_.gain_reference, options_.revisit_radius,
         options_.revisit_angle_deg, replan_interval_, revisit_cooldown_, progress_timeout_,
-        progress_distance_, input_timeout_, map_timeout_};
+        progress_distance_, input_timeout_, map_timeout_, goal_options_.radius,
+        goal_options_.angle_deg, goal_options_.cost_per_meter};
     for (double value : positive) {
       if (!std::isfinite(value) || value <= 0) {
         return false;
@@ -148,6 +156,7 @@ class ExplorationNode : public rclcpp::Node {
            options_.information_cost < 1e8 &&
            std::isfinite(options_.switch_penalty) && options_.switch_penalty >= 0 &&
            options_.switch_penalty < 1e8 &&
+           goal_options_.angle_deg <= 180 && goal_options_.cost_per_meter < 1e8 &&
            options_.sensor_fov_deg <= 360 && options_.revisit_angle_deg <= 180 &&
            options_.free_threshold >= 0 && options_.free_threshold < 100;
   }
@@ -156,6 +165,32 @@ class ExplorationNode : public rclcpp::Node {
     std_msgs::msg::String message;
     message.data = text;
     pub_status_->publish(message);
+  }
+
+  void on_goal(const geometry_msgs::msg::PoseStamped &message) {
+    const auto &p = message.pose.position;
+    const auto &q = message.pose.orientation;
+    const double norm = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
+    std::lock_guard<std::mutex> lock(mu_);
+    if (message.header.frame_id.empty() || !std::isfinite(p.x) || !std::isfinite(p.y) ||
+        !std::isfinite(p.z) || std::fabs(p.z) > 1e-6 ||
+        !std::isfinite(norm) || std::fabs(norm - 1.0) > 1e-3 ||
+        std::fabs(q.x) > 1e-6 || std::fabs(q.y) > 1e-6 ||
+        (latest_ && message.header.frame_id != latest_->header.frame_id)) {
+      RCLCPP_WARN(get_logger(), "rejected goal: expected a planar pose in the map frame");
+      return;
+    }
+    goal_ = goal_options_;
+    goal_->pose = {p.x, p.y, tf2::getYaw(q)};
+    goal_frame_ = message.header.frame_id;
+    goal_reached_ = false;
+    ready_ = false;
+    requested_ = true;
+    preferred_.reset();
+    progress_pose_.reset();
+    epoch_.fetch_add(1);
+    pub_action_->publish(geometry_msgs::msg::Twist());
+    cv_.notify_one();
   }
 
   void on_layers(Layers::ConstSharedPtr layers) {
@@ -290,6 +325,22 @@ class ExplorationNode : public rclcpp::Node {
     }
     pose_ = pose;
     have_pose_ = true;
+    if (goal_ && goal_frame_ != layers->header.frame_id) {
+      status("waiting_goal_frame");
+      pub_action_->publish(output);
+      return;
+    }
+    if (goal_ && (goal_reached_ || exploration_goal_reached(pose, *goal_))) {
+      if (!goal_reached_) {
+        goal_reached_ = true;
+        ready_ = false;
+        requested_ = false;
+        epoch_.fetch_add(1);
+      }
+      status("goal_reached");
+      pub_action_->publish(output);
+      return;
+    }
     const auto removed = std::remove_if(recent_.begin(), recent_.end(), [&](const Visit &visit) {
       return std::chrono::duration<double>(current - visit.time).count() >= revisit_cooldown_;
     });
@@ -413,12 +464,15 @@ class ExplorationNode : public rclcpp::Node {
       Observation pose{};
       std::vector<Observation> recent;
       std::optional<Observation> preferred;
+      std::optional<ExplorationGoal> goal;
       std::optional<Scan> scan;
       bool scan_only = false;
+      std::uint32_t ticket = 0;
       {
         std::unique_lock<std::mutex> lock(mu_);
         cv_.wait(lock, [&] {
-          return stop_ || (have_pose_ && latest_ &&
+          return stop_ || (have_pose_ && latest_ && !goal_reached_ &&
+                           (!goal_ || goal_frame_ == latest_->header.frame_id) &&
                            (requested_ || (scan_pending_ && ready_)));
         });
         if (stop_) {
@@ -426,6 +480,8 @@ class ExplorationNode : public rclcpp::Node {
         }
         pose = pose_;
         preferred = preferred_;
+        goal = goal_;
+        ticket = epoch_.load();
         scan_only = !requested_;
         layers = scan_only ? solved_ : latest_;
         scan = latest_scan_;
@@ -435,6 +491,9 @@ class ExplorationNode : public rclcpp::Node {
         }
         requested_ = false;
         planning_ = true;
+        if (!scan_only) {
+          status("planning");
+        }
       }
       const auto apply_scan = [&] {
         if (!scan || scan->frame != layers->header.frame_id) {
@@ -444,7 +503,6 @@ class ExplorationNode : public rclcpp::Node {
         return local_.apply_scan(message.ranges, message.angle_min, message.angle_increment,
                                  message.range_min, message.range_max, scan->x, scan->y, scan->yaw);
       };
-      const auto ticket = epoch_.load();
       if (scan_only) {
         bool ready = true;
         if (apply_scan()) {
@@ -453,15 +511,16 @@ class ExplorationNode : public rclcpp::Node {
         {
           std::lock_guard<std::mutex> lock(mu_);
           planning_ = false;
-          ready_ = ready;
+          if (ticket == epoch_.load()) {
+            ready_ = ready;
+          }
         }
         continue;
       }
-      status("planning");
       const auto grid = grid_from(*layers);
-      const auto terminals = observation_terminals(
+      auto terminals = observation_terminals(
           grid, pose.x, pose.y, theta_cells_, options_, recent,
-          preferred ? &*preferred : nullptr);
+          preferred ? &*preferred : nullptr, goal ? &*goal : nullptr);
       geometry_msgs::msg::PoseArray candidates;
       candidates.header = layers->header;
       for (const auto &terminal : terminals) {
@@ -471,6 +530,10 @@ class ExplorationNode : public rclcpp::Node {
             (terminal.heading + 0.5) * (360 / theta_cells_) * kPi / 180.0}));
       }
       pub_candidates_->publish(candidates);
+      if (goal) {
+        const auto destinations = goal_terminals(grid, theta_cells_, *goal);
+        terminals.insert(terminals.end(), destinations.begin(), destinations.end());
+      }
       const bool loaded = planner_.load_map(
           grid.width, grid.height, grid.resolution, grid.origin_x, grid.origin_y,
           0, 0, 0, 1, grid.costmap, theta_cells_, 0, 0, 0.2, 10, MapType::CostAdd, true);
@@ -479,7 +542,7 @@ class ExplorationNode : public rclcpp::Node {
       if (loaded && global_.prepare_terminals(terminals, true)) {
         apply_scan();
         ready = global_.solve(epoch_, ticket).converged;
-        if (ready) {
+        if (ready && ticket == epoch_.load()) {
           target = publish_field(*layers, pose);
           const auto command = local_.command(pose.x, pose.y, pose.yaw);
           ready = command.have_action || command.arrived;
@@ -494,9 +557,12 @@ class ExplorationNode : public rclcpp::Node {
       }
       {
         std::lock_guard<std::mutex> lock(mu_);
+        planning_ = false;
+        if (ticket != epoch_.load()) {
+          continue;
+        }
         solved_ = layers;
         last_plan_ = Clock::now();
-        planning_ = false;
         ready_ = ready;
         preferred_ = target;
         if (!ready) {
@@ -524,6 +590,7 @@ class ExplorationNode : public rclcpp::Node {
   GlobalPlanner global_;
   LocalPlanner local_;
   ExplorationOptions options_;
+  ExplorationGoal goal_options_;
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;
   int theta_cells_ = 60;
@@ -538,6 +605,9 @@ class ExplorationNode : public rclcpp::Node {
   bool stop_ = false, requested_ = false, planning_ = false, ready_ = false;
   bool scan_pending_ = false;
   bool have_pose_ = false;
+  bool goal_reached_ = false;
+  std::optional<ExplorationGoal> goal_;
+  std::string goal_frame_;
   Layers::ConstSharedPtr latest_, solved_;
   Observation pose_{};
   std::optional<Observation> preferred_, progress_pose_;
@@ -553,6 +623,7 @@ class ExplorationNode : public rclcpp::Node {
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_status_;
   rclcpp::Subscription<Layers>::SharedPtr sub_layers_;
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr sub_scan_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_goal_;
   rclcpp::TimerBase::SharedPtr timer_;
 };
 }  // namespace value_iteration3

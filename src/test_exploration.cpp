@@ -5,6 +5,7 @@
 #include "value_iteration3/local_planner.hpp"
 
 #include <atomic>
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -88,6 +89,75 @@ int main() {
   expect(!clear_segment(diagonal, 3, 3, 0.5, 0.5, 2.5, 2.5, 100),
          "supercover rejects diagonal corner cutting");
 
+  ExplorationGoal destination;
+  destination.pose = {4.95, -1.25, 0};
+  destination.radius = 0.25;
+  destination.angle_deg = 30;
+  destination.cost_per_meter = 4;
+  const auto biased = observation_terminals(
+      grid, pose.x, pose.y, 12, options, {}, nullptr, &destination);
+  expect(biased.size() == terminals.size(), "goal bias preserves safe observation candidates");
+  bool biased_costs = !biased.empty();
+  for (std::size_t i = 0; i < biased.size() && i < terminals.size(); ++i) {
+    const auto &terminal = terminals[i];
+    const double x = grid.origin_x + (terminal.x + 0.5) * grid.resolution;
+    const double y = grid.origin_y + (terminal.y + 0.5) * grid.resolution;
+    biased_costs = biased_costs && biased[i].x == terminal.x && biased[i].y == terminal.y &&
+        biased[i].heading == terminal.heading &&
+        std::fabs(biased[i].cost - terminal.cost -
+                  std::hypot(x - destination.pose.x, y - destination.pose.y) * 4) < 1e-9;
+  }
+  expect(biased_costs, "observation cost includes remaining goal distance in seconds");
+  auto destinations = goal_terminals(grid, 12, destination);
+  expect(!destinations.empty(), "known goal generates terminals without information");
+  bool safe_goals = true;
+  for (const auto &terminal : destinations) {
+    safe_goals = safe_goals && terminal.cost == 0 &&
+        grid.costmap[terminal.y * grid.width + terminal.x] >= 0 &&
+        (terminal.heading == 0 || terminal.heading == 11);
+  }
+  expect(safe_goals, "goal terminals preserve free space and wraparound yaw tolerance");
+  auto any_heading_goal = destination;
+  any_heading_goal.angle_deg = 180;
+  expect(goal_terminals(grid, 12, any_heading_goal).size() == destinations.size() * 6,
+         "180-degree tolerance accepts every heading including the antipodal bin");
+  auto unknown_goal_grid = grid;
+  std::fill(unknown_goal_grid.costmap.begin(), unknown_goal_grid.costmap.end(), -1);
+  std::fill(unknown_goal_grid.occupancy.begin(), unknown_goal_grid.occupancy.end(), -1);
+  expect(goal_terminals(unknown_goal_grid, 12, destination).empty(),
+         "unknown goal never becomes traversable");
+  auto outside_goal = destination;
+  outside_goal.pose.x = 100;
+  expect(goal_terminals(grid, 12, outside_goal).empty(),
+         "out-of-map goal creates no unsafe terminal");
+  expect(!observation_terminals(grid, pose.x, pose.y, 12, options, {},
+                               nullptr, &outside_goal).empty(),
+         "outside-map goal retains safe exploration candidates");
+  expect(exploration_goal_reached({4.95, -1.25, -0.1}, destination),
+         "goal arrival accepts wrapped heading");
+  expect(!exploration_goal_reached({4.95, -1.25, 1.0}, destination),
+         "position alone does not complete an oriented goal");
+  expect(!exploration_goal_reached(pose, destination), "distant goal is not reached");
+
+  const auto known_grid = make_grid();
+  ExplorationGoal default_goal;
+  default_goal.pose = destination.pose;
+  Planner goal_planner(1);
+  goal_planner.set_actions({{"forward", 0.3, 0}, {"back", -0.2, 0},
+                            {"right", 0, -20}, {"rightfw", 0.2, -20},
+                            {"left", 0, 20}, {"leftfw", 0.2, 20}});
+  goal_planner.set_swept_collision_check(true);
+  expect(goal_planner.load_map(24, 16, 0.1, 3, -2, 0, 0, 0, 1, known_grid.costmap,
+                              36, 0, 0, 0.3, 10, MapType::CostAdd),
+         "load known map without information");
+  GlobalPlanner goal_global(goal_planner);
+  std::atomic<std::uint32_t> goal_epoch{1};
+  expect(goal_global.prepare_terminals(goal_terminals(known_grid, 36, default_goal)),
+         "default goal creates safe terminal region");
+  expect(goal_global.solve(goal_epoch, 1).converged, "default goal field converges");
+  expect(LocalPlanner(goal_planner, 1).command(pose.x, pose.y, pose.yaw).have_action,
+         "default margins propagate goal value across a 10 cm map without information");
+
   Planner planner(1);
   expect(planner.set_actions({{"forward", 0.3, 0}, {"back", -0.3, 0},
                              {"left", 0, 90}, {"right", 0, -90}}), "actions");
@@ -125,6 +195,17 @@ int main() {
   field = planner.view();
   expect(field && field->cost[field->index(4, 7, 0)] < Scale::max_cost,
          "newly free cells become reachable after map update");
+  // This coarse 90-degree motion set needs the same 0.4 m margin as load().
+  auto solver_goal = destination;
+  solver_goal.radius = 0.4;
+  expect(global.prepare_terminals(goal_terminals(grid, 12, solver_goal), true),
+         "install goal-only exploration terminals");
+  expect(global.solve(epoch, 1).converged, "goal-only exploration field converges");
+  LocalPlanner goal_local(planner, 1);
+  expect(goal_local.command(pose.x, pose.y, pose.yaw).have_action,
+         "no-information map still drives toward a supplied goal");
+  expect(goal_local.command(destination.pose.x, destination.pose.y, 0).arrived,
+         "goal terminal is reachable with the original solver");
   expect(!global.prepare_terminals({{12, 7, 12, 0}, {-1, 0, 0, 0},
                                     {1, 1, 0, std::numeric_limits<double>::quiet_NaN()}}),
          "invalid terminal list is rejected");

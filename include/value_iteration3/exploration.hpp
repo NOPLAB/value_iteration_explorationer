@@ -28,6 +28,13 @@ struct Observation {
   double yaw;
 };
 
+struct ExplorationGoal {
+  Observation pose{};
+  double radius = 0.3;
+  double angle_deg = 10.0;
+  double cost_per_meter = 1.0 / 0.3;
+};
+
 struct ExplorationOptions {
   double sensor_range = 3.0;
   double sensor_fov_deg = 180.0;
@@ -49,7 +56,10 @@ double observation_gain(const ExplorationGrid &grid, const Observation &pose,
 std::vector<GlobalPlanner::Terminal> observation_terminals(
     const ExplorationGrid &grid, double robot_x, double robot_y, int headings,
     const ExplorationOptions &options, const std::vector<Observation> &recent,
-    const Observation *preferred = nullptr);
+    const Observation *preferred = nullptr, const ExplorationGoal *goal = nullptr);
+std::vector<GlobalPlanner::Terminal> goal_terminals(
+    const ExplorationGrid &grid, int headings, const ExplorationGoal &goal);
+bool exploration_goal_reached(const Observation &pose, const ExplorationGoal &goal);
 
 // Conservative supercover traversal of every touched grid cell.
 bool clear_segment(const std::vector<std::int8_t> &cells, int width, int height,

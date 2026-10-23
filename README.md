@@ -21,7 +21,8 @@ Cartographer /map
        -> /value_function
 ```
 
-No `/goal_pose` is required. The costmap uses the original `cost_add` contract:
+`/goal_pose` is optional; without a goal the node explores for information alone.
+The costmap uses the original `cost_add` contract:
 `-1` is blocked; `0..100` is extra cost in seconds, added to the solver's 1 second
 base cost. **100 is traversable, not a lethal-cost sentinel.** The map producer
 blocks unknown cells and cells above `free_threshold`, inflates them by
@@ -46,6 +47,37 @@ first unknown/ambiguous boundary is visible, not the unknown space behind it.
 Observation terminals have `observation_radius` spatial extent, as the original
 goal margins do, to accommodate stochastic successor cells. This is a local
 approximation to observation gain over that region.
+
+### Exploration with a goal
+
+Publish a `geometry_msgs/PoseStamped` on `/goal_pose` to give exploration a
+destination. The pose must be planar, have a unit quaternion, and use the map
+layers' frame (normally `map`); other frames are rejected, not transformed.
+A goal can arrive before the first map. Planning waits if that map's frame does
+not match the stored goal.
+
+Safe free cells within `goal_margin_radius` (0.3 m) and
+`goal_margin_theta` (10 degrees) of the goal form zero-cost terminals.
+Each observation terminal also includes its straight-line distance to the goal
+times `goal_cost_per_meter` (default 3.3333333333333335 seconds per meter, matching
+the shipped 0.3 m forward step's 1 second base cost).
+The value field compares movement cost plus these terminal costs, so information
+and progress toward the goal compete in the same solve. This distance is a
+heuristic: it does not account for walls, turns, or future map discoveries.
+Terminal costs are capped at 100 million seconds.
+
+Goals in unknown, blocked, disconnected, or out-of-map space do not make that
+space traversable. The node can continue through reachable observation poses
+while the map develops, but cannot guarantee discovering a route.
+Goal terminal regions must contain whole grid cells and heading bins; coarse
+maps or heading bins may require larger goal margins.
+
+Reaching the goal's position and yaw tolerances publishes zero actions and
+`goal_reached` on `/exploration/status`. The node stays stopped until another
+valid goal arrives. Reaching an observation terminal still continues exploration.
+A new goal replaces the old one, cancels its pending solve, and stops action
+output until the replacement field is ready. Invalid goals leave the current
+goal unchanged.
 
 Recent observation poses are suppressed within `revisit_radius` and
 `revisit_angle_deg` for `revisit_cooldown` seconds. Observations are recorded

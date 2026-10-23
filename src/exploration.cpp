@@ -133,7 +133,7 @@ double observation_gain(const ExplorationGrid &grid, const Observation &pose,
 std::vector<GlobalPlanner::Terminal> observation_terminals(
     const ExplorationGrid &grid, double robot_x, double robot_y, int headings,
     const ExplorationOptions &options, const std::vector<Observation> &recent,
-    const Observation *preferred) {
+    const Observation *preferred, const ExplorationGoal *goal) {
   std::vector<GlobalPlanner::Terminal> terminals;
   if (!exploration_grid_valid(grid) || headings <= 0 || headings > 64 ||
       options.sensor_range <= 0 || options.gain_reference <= 0) {
@@ -258,7 +258,11 @@ std::vector<GlobalPlanner::Terminal> observation_terminals(
               }
             }
             if (!suppressed) {
-              terminals.push_back({gx, gy, heading, cost});
+              const double remaining = goal ? std::hypot(
+                  actual.x - goal->pose.x, actual.y - goal->pose.y) *
+                      goal->cost_per_meter : 0;
+              terminals.push_back({gx, gy, heading,
+                                   goal ? std::min(1e8, cost + remaining) : cost});
             }
           }
         }
@@ -271,6 +275,48 @@ std::vector<GlobalPlanner::Terminal> observation_terminals(
   terminals.erase(std::unique(terminals.begin(), terminals.end(), [](const auto &a, const auto &b) {
     return a.x == b.x && a.y == b.y && a.heading == b.heading;
   }), terminals.end());
+  return terminals;
+}
+
+bool exploration_goal_reached(const Observation &pose, const ExplorationGoal &goal) {
+  return std::hypot(pose.x - goal.pose.x, pose.y - goal.pose.y) <= goal.radius &&
+         angle_distance(pose.yaw, goal.pose.yaw) <= goal.angle_deg * kPi / 180.0;
+}
+
+std::vector<GlobalPlanner::Terminal> goal_terminals(
+    const ExplorationGrid &grid, int headings, const ExplorationGoal &goal) {
+  std::vector<GlobalPlanner::Terminal> terminals;
+  if (!exploration_grid_valid(grid) || headings <= 0 || headings > 64 ||
+      360 % headings != 0) {
+    return terminals;
+  }
+  const double angle_step = 2 * kPi / headings;
+  const double tolerance = goal.angle_deg * kPi / 180.0;
+  for (int y = 0; y < grid.height; ++y) {
+    for (int x = 0; x < grid.width; ++x) {
+      if (grid.costmap[static_cast<std::size_t>(y) * grid.width + x] < 0) {
+        continue;
+      }
+      const double x0 = grid.origin_x + x * grid.resolution;
+      const double y0 = grid.origin_y + y * grid.resolution;
+      bool inside = true;
+      for (int corner = 0; corner < 4; ++corner) {
+        inside = inside && std::hypot(
+            x0 + (corner % 2) * grid.resolution - goal.pose.x,
+            y0 + (corner / 2) * grid.resolution - goal.pose.y) <= goal.radius;
+      }
+      if (!inside) {
+        continue;
+      }
+      for (int t = 0; t < headings; ++t) {
+        const double center = (t + 0.5) * angle_step;
+        if (goal.angle_deg == 180 ||
+            angle_distance(center, goal.pose.yaw) + angle_step / 2 <= tolerance + 1e-12) {
+          terminals.push_back({x, y, t, 0});
+        }
+      }
+    }
+  }
   return terminals;
 }
 

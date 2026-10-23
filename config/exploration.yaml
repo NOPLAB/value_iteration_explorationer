@@ -19,6 +19,9 @@
     revisit_radius: 0.75
     revisit_angle_deg: 60.0
     switch_penalty: 3.0
+    goal_margin_radius: 0.3
+    goal_margin_theta: 10.0
+    goal_cost_per_meter: 3.3333333333333335
     replan_interval: 1.0
     revisit_cooldown: 120.0
     progress_timeout: 15.0
