@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 nop and CIT autonomous robot laboratory
 // SPDX-License-Identifier: BSD-3-Clause
 
-#include "value_iteration3/actions.hpp"
+#include "value_iteration_explorationer/actions.hpp"
 
 #include <cctype>
 #include <exception>
@@ -9,7 +9,7 @@
 #include <string>
 #include <utility>
 
-namespace value_iteration3 {
+namespace value_iteration_explorationer {
 namespace {
 
 std::string strip_comment(const std::string &line) {
@@ -177,4 +177,4 @@ ActionList read_action_list(const std::string &path) {
   return result;
 }
 
-}  // namespace value_iteration3
+}  // namespace value_iteration_explorationer

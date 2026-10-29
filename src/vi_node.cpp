@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 nop and CIT autonomous robot laboratory
 // SPDX-License-Identifier: BSD-3-Clause
 
-#include "value_iteration3/actions.hpp"
-#include "value_iteration3/global_planner.hpp"
-#include "value_iteration3/local_planner.hpp"
-#include "value_iteration3/planner.hpp"
+#include "value_iteration_explorationer/actions.hpp"
+#include "value_iteration_explorationer/global_planner.hpp"
+#include "value_iteration_explorationer/local_planner.hpp"
+#include "value_iteration_explorationer/planner.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -36,7 +36,7 @@
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
 
-namespace value_iteration3 {
+namespace value_iteration_explorationer {
 namespace {
 
 constexpr double kPi = 3.14159265358979323846;
@@ -416,11 +416,11 @@ class ViNode : public rclcpp::Node {
   std::vector<Scan> scans_;
 };
 
-}  // namespace value_iteration3
+}  // namespace value_iteration_explorationer
 
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
-  auto node = std::make_shared<value_iteration3::ViNode>();
+  auto node = std::make_shared<value_iteration_explorationer::ViNode>();
   try {
     node->init();
     if (rclcpp::ok()) {

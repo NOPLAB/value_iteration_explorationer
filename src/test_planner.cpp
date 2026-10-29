@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 nop and CIT autonomous robot laboratory
 // SPDX-License-Identifier: BSD-3-Clause
 
-#include "value_iteration3/actions.hpp"
-#include "value_iteration3/global_planner.hpp"
-#include "value_iteration3/local_planner.hpp"
-#include "value_iteration3/planner.hpp"
+#include "value_iteration_explorationer/actions.hpp"
+#include "value_iteration_explorationer/global_planner.hpp"
+#include "value_iteration_explorationer/local_planner.hpp"
+#include "value_iteration_explorationer/planner.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-namespace value_iteration3 {
+namespace value_iteration_explorationer {
 namespace {
 
 constexpr int kWidth = 32;
@@ -203,6 +203,6 @@ int planner_self_test() {
   return failures == 0 ? 0 : 1;
 }
 
-}  // namespace value_iteration3
+}  // namespace value_iteration_explorationer
 
-int main() { return value_iteration3::planner_self_test(); }
+int main() { return value_iteration_explorationer::planner_self_test(); }

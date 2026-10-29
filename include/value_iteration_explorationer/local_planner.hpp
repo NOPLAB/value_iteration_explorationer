@@ -1,16 +1,17 @@
 // SPDX-FileCopyrightText: 2026 nop and CIT autonomous robot laboratory
 // SPDX-License-Identifier: BSD-3-Clause
 
-#ifndef VALUE_ITERATION3_LOCAL_PLANNER_HPP_
-#define VALUE_ITERATION3_LOCAL_PLANNER_HPP_
+#ifndef VALUE_ITERATION_EXPLORATIONER_LOCAL_PLANNER_HPP_
+#define VALUE_ITERATION_EXPLORATIONER_LOCAL_PLANNER_HPP_
 
-#include "value_iteration3/planner.hpp"
+#include "value_iteration_explorationer/planner.hpp"
 
 #include <atomic>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
-namespace value_iteration3 {
+namespace value_iteration_explorationer {
 
 inline int heading_index(double yaw_rad, int t_resolution_deg) {
   constexpr double kPi = 3.14159265358979323846;
@@ -39,11 +40,16 @@ class LocalPlanner {
   LocalPlanner(Planner &planner, double range_m);
 
   void set_range(double range_m);
+  // Radius is validated by the caller at the robot configuration boundary.
+  void set_obstacle_radius(double radius_m) { obstacle_radius_ = radius_m; }
   bool apply_scan(const std::vector<float> &ranges, float angle_min, float angle_increment,
                   float range_min, float range_max, double x, double y, double yaw);
   SolveResult update(const std::atomic<std::uint32_t> &epoch, std::uint32_t ticket);
   // Continuous exploration selects an action even at an observation terminal.
   Command command(double x, double y, double yaw, bool continuous = false) const;
+  // Controllers may retain an accepted snapshot while the worker publishes previews.
+  Command command(const View &field, double x, double y, double yaw,
+                  bool continuous = false) const;
 
  private:
   void set_window(double x, double y);
@@ -52,12 +58,13 @@ class LocalPlanner {
 
   Planner &planner_;
   double range_m_ = 1.0;
+  std::optional<double> obstacle_radius_;
   int win_x0_ = 0;
   int win_x1_ = -1;
   int win_y0_ = 0;
   int win_y1_ = -1;
 };
 
-}  // namespace value_iteration3
+}  // namespace value_iteration_explorationer
 
 #endif

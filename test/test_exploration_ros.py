@@ -2,15 +2,20 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from copy import deepcopy
-from math import floor, hypot
+import json
+from math import floor, hypot, pi
 from pathlib import Path
 import signal
 import subprocess
 import threading
 from uuid import uuid4
 
-from ament_index_python.packages import get_package_prefix
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from geometry_msgs.msg import PoseArray, PoseStamped, TransformStamped, Twist
+from launch import LaunchContext
+from launch.actions import DeclareLaunchArgument
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.utilities import perform_substitutions
 from nav_msgs.msg import OccupancyGrid, Path as NavPath
 import pytest
 import rclpy
@@ -53,6 +58,7 @@ class RosScenario:
             '/exploration/information_map', '/exploration/map_layers',
             '/exploration/candidates', '/exploration/path',
             '/exploration/status', '/exploration/action',
+            '/exploration/diagnostics',
         ]
         self.remappings = []
         for topic in self.topics:
@@ -112,7 +118,8 @@ class RosScenario:
         code, output = self.result(finished, f'{topic} publisher exit')
         assert code == 0, output
 
-    def sensor_stream(self):
+    def sensor_stream(self, ranges=None, angle_min=-1.0, angle_increment=0.1):
+        self.scan_ranges = [float('inf')] * 21 if ranges is None else ranges
         self.broadcaster = StaticTransformBroadcaster(self.node)
         transforms = []
         for parent, child, x, y in [
@@ -133,11 +140,11 @@ class RosScenario:
             message = LaserScan()
             message.header.frame_id = self.tag + '_sensor'
             message.header.stamp = self.node.get_clock().now().to_msg()
-            message.angle_min = -1.0
-            message.angle_increment = 0.1
+            message.angle_min = angle_min
+            message.angle_increment = angle_increment
             message.range_min = 0.05
             message.range_max = 5.0
-            message.ranges = [float('inf')] * 21
+            message.ranges = self.scan_ranges
             publisher.publish(message)
 
         # This timer is fresh sensor input, not a delay or a retry mechanism.
@@ -213,6 +220,221 @@ def goal_ros(ros: RosScenario) -> RosScenario:
     })
     ros.sensor_stream()
     return ros
+
+
+@pytest.fixture
+def footprint_ros(ros: RosScenario) -> RosScenario:
+    ros.start('exploration_map_node', {
+        'robot_radius': 0.15, 'safety_margin': 0.05, 'inflation_radius': 0.2,
+        'inflate_around_unknown': False,
+    })
+    ros.start('exploration_node', {
+        'theta_cell_num': 36, 'global_thread_num': 1,
+        'sensor_range': 0.6, 'candidate_spacing': 0.2,
+        'observation_radius': 0.2, 'min_gain': 0.001,
+        'robot_radius': 0.15, 'safety_margin': 0.05,
+        'replan_interval': 0.1, 'input_timeout': 5.0,
+        'map_timeout': 60.0, 'progress_timeout': 60.0,
+        'base_frame': ros.tag + '_base',
+    })
+    return ros
+
+
+def test_actual_scan_consumes_regions_without_stationary_renewal(
+        footprint_ros: RosScenario) -> None:
+    ros = footprint_ros
+    grid = make_map(ros, 1)
+    grid.data = [35] * len(grid.data)
+    grid.data[10 * 40 + 20] = -1
+    bundle_future = ros.expect(
+        ExplorationMap, '/exploration/map_layers',
+        lambda message: message.header == grid.header)
+    cost_future = ros.expect(
+        OccupancyGrid, '/exploration/costmap',
+        lambda message: message.header == grid.header)
+    ready_future = ros.expect(
+        String, '/exploration/diagnostics',
+        lambda message: json.loads(message.data)['plan_status'] == 'ready')
+    action_future = ros.expect(
+        Twist, '/exploration/action',
+        lambda action: ready_future.done() and action != Twist(), qos=10)
+    replanned_future = ros.expect(
+        String, '/exploration/diagnostics',
+        lambda message: ready_future.done()
+        and json.loads(message.data)['plan_sequence']
+        > json.loads(ready_future.result().data)['plan_sequence'])
+    refreshed_future = ros.expect(
+        String, '/exploration/diagnostics',
+        lambda message: replanned_future.done()
+        and json.loads(message.data)['plan_sequence']
+        > json.loads(replanned_future.result().data)['plan_sequence'])
+    continued_future = ros.expect(
+        Twist, '/exploration/action',
+        lambda action: refreshed_future.done() and action != Twist(), qos=10)
+
+    ros.sensor_stream([5.0] * 720, -pi, pi / 360)
+    ros.publish_once('/map', 'nav_msgs/msg/OccupancyGrid', grid)
+
+    bundle = ros.result(bundle_future, 'startup map bundle')
+    cost = ros.result(cost_future, 'startup footprint costmap')
+    assert cost.data[10 * 40 + 20] == -1
+    assert cost.data[12 * 40 + 20] == 0
+    ready = json.loads(ros.result(ready_future, 'ready startup plan').data)
+    assert ready['robot_cell_x'] == 20 and ready['robot_cell_y'] == 12
+    assert ready['raw_occupancy'] == 35 and ready['movement_cost'] == 0
+    assert ready['map_revision'] == bundle.revision
+    assert ready['plan_sequence'] > 0
+    assert ready['terminal_count'] > 0
+    assert ready['observed_region_count'] > 1
+    assert ready['failure_history_size'] == 0
+    ros.result(action_future, 'nonzero startup action without a goal or TF change')
+    previous = ready
+    for future in (replanned_future, refreshed_future):
+        diagnostic = json.loads(ros.result(future, 'new stationary plan completion').data)
+        assert diagnostic['plan_sequence'] > previous['plan_sequence']
+        assert diagnostic['plan_status'] == 'ready'
+        assert diagnostic['map_revision'] == ready['map_revision']
+        assert diagnostic['observed_region_count'] == ready['observed_region_count']
+        previous = diagnostic
+    ros.result(continued_future, 'continued nonzero action after stationary replanning')
+    consumed_future = ros.expect(
+        String, '/exploration/diagnostics',
+        lambda message: json.loads(message.data)['observed_region_count']
+        > ready['observed_region_count'])
+    resumed_future = ros.expect(
+        Twist, '/exploration/action',
+        lambda action: consumed_future.done() and action != Twist(), qos=10)
+    moved = TransformStamped()
+    moved.header.frame_id = ros.tag + '_map'
+    moved.child_frame_id = ros.tag + '_base'
+    moved.transform.translation.x = 0.25
+    moved.transform.translation.y = 0.05
+    moved.transform.rotation.w = 1.0
+    ros.broadcaster.sendTransform(moved)
+    consumed = json.loads(ros.result(consumed_future, 'observation consumption after motion').data)
+    assert consumed['plan_status'] == 'ready'
+    assert consumed['plan_sequence'] > previous['plan_sequence']
+    ros.result(resumed_future, 'ordinary policy resumes after observation consumption')
+
+
+def test_measured_return_and_changed_map_reopen_same_pose(footprint_ros: RosScenario) -> None:
+    ros = footprint_ros
+    grid = make_map(ros, 1)
+    grid.data = [0] * len(grid.data)
+    grid.data[12 * 40 + 23] = 35  # Interest 0.30 m ahead, beyond the first return.
+    ready_future = ros.expect(
+        String, '/exploration/diagnostics',
+        lambda message: json.loads(message.data)['plan_status'] == 'ready')
+    ros.sensor_stream([0.2] * 720, -pi, pi / 360)
+    ros.publish_once('/map', 'nav_msgs/msg/OccupancyGrid', grid)
+    ready = json.loads(ros.result(ready_future, 'predicted view beyond short actual return').data)
+    assert ready['terminal_count'] > 0
+    assert ready['observed_region_count'] == 0
+
+    consumed_future = ros.expect(
+        String, '/exploration/diagnostics',
+        lambda message: json.loads(message.data)['plan_status'] == 'no_candidates'
+        and json.loads(message.data)['observed_region_count'] > 0)
+    ros.scan_ranges = [5.0] * 720
+    consumed = json.loads(ros.result(consumed_future, 'scan consumes overlapping views').data)
+    assert consumed['terminal_count'] == 0
+
+    # No TF/robot movement: change only the interest cell and shorten the next scans.
+    short_scan_future = ros.expect(
+        LaserScan, '/scan', lambda scan: all(abs(r - 0.2) < 1e-5 for r in scan.ranges),
+        qos=qos_profile_sensor_data)
+    ros.scan_ranges = [0.2] * 720
+    short_scan = ros.result(short_scan_future, 'short-range stream before changed-map stimulus')
+    short_stamp = short_scan.header.stamp.sec * 10**9 + short_scan.header.stamp.nanosec
+    accepted_short_future = ros.expect(
+        String, '/exploration/diagnostics',
+        lambda message: json.loads(message.data)['accepted_scan_stamp_ns'] >= short_stamp)
+    ros.result(accepted_short_future, 'planner accepts short scan before changed-map stimulus')
+    changed = deepcopy(grid)
+    changed.header.stamp.sec = 2
+    changed.data[12 * 40 + 23] = 36
+    reopened_future = ros.expect(
+        String, '/exploration/diagnostics',
+        lambda message: json.loads(message.data)['map_revision'] > consumed['map_revision']
+        and json.loads(message.data)['plan_status'] == 'ready')
+    ros.publish_once('/map', 'nav_msgs/msg/OccupancyGrid', changed)
+    reopened = json.loads(ros.result(reopened_future, 'changed map reopens the same pose').data)
+    assert reopened['terminal_count'] > 0
+    assert reopened['robot_cell_x'] == ready['robot_cell_x']
+    assert reopened['robot_cell_y'] == ready['robot_cell_y']
+
+    repaired_future = ros.expect(
+        String, '/exploration/diagnostics',
+        lambda message: json.loads(message.data)['map_revision'] == reopened['map_revision']
+        and json.loads(message.data)['plan_sequence'] > reopened['plan_sequence']
+        and json.loads(message.data)['plan_status'] == 'no_candidates')
+    stopped_future = ros.expect(
+        Twist, '/exploration/action',
+        lambda action: repaired_future.done() and action == Twist(), qos=10)
+    ros.scan_ranges = [5.0] * 720
+    repaired = json.loads(ros.result(repaired_future, 'new scan consumes changed interest').data)
+    assert repaired['terminal_count'] == 0
+    ros.result(stopped_future, 'exhausted observations stop without invented terminal actions')
+
+
+def test_region_size_cannot_alias_finer_map_cells(footprint_ros: RosScenario) -> None:
+    ros = footprint_ros
+    grid = make_map(ros, 1)
+    grid.info.resolution = 0.025  # Smaller than the configured 0.05 m evidence regions.
+    rejected_future = ros.expect(
+        String, '/exploration/status', lambda message: message.data == 'invalid_map')
+    stopped_future = ros.expect(
+        Twist, '/exploration/action',
+        lambda action: rejected_future.done() and action == Twist(), qos=10)
+    ros.publish_once('/map', 'nav_msgs/msg/OccupancyGrid', grid)
+    ros.result(rejected_future, 'reject evidence regions coarser than map cells')
+    ros.result(stopped_future, 'rejected map cannot install an actionable field')
+
+
+@pytest.mark.parametrize(
+    'occupancy, updates, origin_x, plan_status, raw_occupancy, movement_cost', [
+        (35, ((10 * 40 + 20, 100),), -2.0, 'robot_blocked', 35, -1),
+        (35, ((12 * 40 + 20, -1),), -2.0, 'robot_blocked', -1, -1),
+        (0, (), -2.0, 'no_candidates', 0, 0),
+        (35, (), 10.0, 'robot_outside_map', None, None),
+    ],
+    ids=['inflated-known-obstacle', 'unknown-start', 'no-information', 'outside-map'])
+def test_startup_failure_diagnostics_stop_actions(
+        footprint_ros: RosScenario, occupancy: int, updates: tuple[tuple[int, int], ...],
+        origin_x: float, plan_status: str,
+        raw_occupancy: int | None, movement_cost: int | None) -> None:
+    ros = footprint_ros
+    grid = make_map(ros, 1)
+    grid.info.origin.position.x = origin_x
+    grid.data = [occupancy] * len(grid.data)
+    for cell, value in updates:
+        grid.data[cell] = value
+    bundle_future = ros.expect(
+        ExplorationMap, '/exploration/map_layers',
+        lambda message: message.header == grid.header)
+    diagnostic_future = ros.expect(
+        String, '/exploration/diagnostics',
+        lambda message: json.loads(message.data)['plan_status'] == plan_status)
+    stop_future = ros.expect(
+        Twist, '/exploration/action',
+        lambda action: diagnostic_future.done() and action == Twist(), qos=10)
+
+    ros.sensor_stream()
+    ros.publish_once('/map', 'nav_msgs/msg/OccupancyGrid', grid)
+
+    bundle = ros.result(bundle_future, 'startup failure map bundle')
+    diagnostic = json.loads(ros.result(diagnostic_future, plan_status + ' diagnostic').data)
+    assert diagnostic['plan_status'] == plan_status
+    assert diagnostic['plan_sequence'] > 0
+    assert diagnostic['map_revision'] == bundle.revision
+    assert diagnostic['robot_cell_x'] == floor(
+        (0.05 - grid.info.origin.position.x) / grid.info.resolution)
+    assert diagnostic['robot_cell_y'] == 12
+    assert diagnostic['raw_occupancy'] == raw_occupancy
+    assert diagnostic['movement_cost'] == movement_cost
+    assert diagnostic['terminal_count'] == 0
+    assert diagnostic['observation_history_size'] == diagnostic['failure_history_size'] == 0
+    ros.result(stop_future, 'zero action after ' + plan_status + ' diagnostic')
 
 
 def make_goal(ros: RosScenario, x: float, y: float = 0.05) -> PoseStamped:
@@ -373,6 +595,22 @@ def test_example_executor_stops_when_simulation_clock_is_paused(ros):
     process = ros.processes[0]
     process.send_signal(signal.SIGINT)
     assert process.wait(timeout=5) == 0
+
+
+def test_cartographer_example_has_installed_default_configuration():
+    share = Path(get_package_share_directory('value_iteration_explorationer'))
+    context = LaunchContext()
+    description = PythonLaunchDescriptionSource(
+        str(share / 'launch/cartographer_exploration.launch.py')).get_launch_description(context)
+    arguments = {
+        action.name: action.default_value for action in description.entities
+        if isinstance(action, DeclareLaunchArgument)
+    }
+    assert arguments['configuration_directory'] is not None
+    assert arguments['configuration_basename'] is not None
+    directory = perform_substitutions(context, arguments['configuration_directory'])
+    filename = perform_substitutions(context, arguments['configuration_basename'])
+    assert (Path(directory) / filename).is_file()
 
 
 def test_installed_map_and_exploration_policy(ros):

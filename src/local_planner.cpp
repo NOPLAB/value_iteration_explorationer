@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 nop and CIT autonomous robot laboratory
 // SPDX-License-Identifier: BSD-3-Clause
 
-#include "value_iteration3/local_planner.hpp"
+#include "value_iteration_explorationer/local_planner.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -9,7 +9,7 @@
 #include <utility>
 #include <vector>
 
-namespace value_iteration3 {
+namespace value_iteration_explorationer {
 namespace {
 constexpr double kPi = 3.14159265358979323846;
 constexpr std::uint64_t kUnreached = ~std::uint64_t{0};
@@ -111,8 +111,13 @@ bool LocalPlanner::apply_scan(const std::vector<float> &ranges, float angle_min,
       any = write_local(ix, iy, field.local_[xy] / 2) || any;
     }
 
-    for (int dx = -2; dx <= 2; ++dx) {
-      for (int dy = -2; dy <= 2; ++dy) {
+    const int margin = obstacle_radius_ ?
+        static_cast<int>(std::ceil(*obstacle_radius_ / field.resolution_)) : 2;
+    for (int dx = -margin; dx <= margin; ++dx) {
+      for (int dy = -margin; dy <= margin; ++dy) {
+        if (obstacle_radius_ && dx * dx + dy * dy > margin * margin) {
+          continue;
+        }
         const int ix = hit_ix + dx;
         const int iy = hit_iy + dy;
         if (!in_window(ix, iy)) {
@@ -154,9 +159,15 @@ SolveResult LocalPlanner::update(const std::atomic<std::uint32_t> &epoch, std::u
 }
 
 LocalPlanner::Command LocalPlanner::command(double x, double y, double yaw, bool continuous) const {
-  Command command;
   const auto field = planner_.view();
-  if (!field || field->resolution <= 0.0) {
+  return field ? command(*field, x, y, yaw, continuous) : Command{};
+}
+
+LocalPlanner::Command LocalPlanner::command(
+    const View &snapshot, double x, double y, double yaw, bool continuous) const {
+  Command command;
+  const auto *field = &snapshot;
+  if (field->resolution <= 0.0) {
     return command;
   }
   const int ix = static_cast<int>(std::floor((x - field->origin_x) / field->resolution));
@@ -183,4 +194,4 @@ LocalPlanner::Command LocalPlanner::command(double x, double y, double yaw, bool
   return command;
 }
 
-}  // namespace value_iteration3
+}  // namespace value_iteration_explorationer

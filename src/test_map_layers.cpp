@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 nop and CIT autonomous robot laboratory
 // SPDX-License-Identifier: BSD-3-Clause
 
-#include "value_iteration3/map_layers.hpp"
+#include "value_iteration_explorationer/map_layers.hpp"
 
 #include <cmath>
 #include <iostream>
@@ -33,9 +33,9 @@ void rejects(F run, const std::string &text) {
 }  // namespace
 
 int main() {
-  using value_iteration3::MapGeometry;
-  using value_iteration3::MapOptions;
-  using value_iteration3::process_map_layers;
+  using value_iteration_explorationer::MapGeometry;
+  using value_iteration_explorationer::MapOptions;
+  using value_iteration_explorationer::process_map_layers;
   MapGeometry geometry{9, 9, 1.0, 12.5, -3.0};
   MapOptions options;
   options.free_threshold = 25;
@@ -80,6 +80,35 @@ int main() {
   options.safety_margin = 0.5;
   expect(process_map_layers(geometry, raw, options).costmap == layers.costmap,
          "safety margin contributes to circular footprint");
+  expect(!options.inflate_around_unknown, "unknown inflation disabled by default");
+  const auto obstacle = process_map_layers(geometry, raw, options);
+  options.inflate_around_unknown = true;
+  expect(process_map_layers(geometry, raw, options).costmap == obstacle.costmap,
+         "real obstacle inflation unchanged by unknown inflation option");
+  raw[40] = -1;
+  const auto inflated_unknown = process_map_layers(geometry, raw, options);
+  options.inflate_around_unknown = false;
+  const auto uninflated_unknown = process_map_layers(geometry, raw, options);
+  expect(uninflated_unknown.costmap[40] == -1 && inflated_unknown.costmap[40] == -1,
+         "unknown itself remains blocked in both inflation modes");
+  expect(uninflated_unknown.costmap[41] == 0 && uninflated_unknown.costmap[42] == 0,
+         "unknown adds neither hard nor soft costs when disabled");
+  expect(inflated_unknown.costmap == obstacle.costmap &&
+         inflated_unknown.costmap[41] == -1 && inflated_unknown.costmap[42] > 0,
+         "enabled unknown inflation uses obstacle hard and soft clearance");
+  expect(uninflated_unknown.information_map == inflated_unknown.information_map &&
+         uninflated_unknown.information_map[40] == options.unknown_value,
+         "unknown inflation preserves information scores");
+  raw[40] = 0;
+  auto free_space = process_map_layers(geometry, raw, options);
+  free_space.costmap[40] = -1;
+  expect(uninflated_unknown.costmap == free_space.costmap,
+         "disabled unknown inflation preserves free space and exterior clearance");
+  expect(uninflated_unknown.costmap[0] == -1 &&
+         uninflated_unknown.costmap[8] == -1 &&
+         uninflated_unknown.costmap[72] == -1 &&
+         uninflated_unknown.costmap[80] == -1,
+         "map exterior blocks footprint with unknown inflation disabled");
   raw.assign(81, 0);
   options = MapOptions{};
   options.robot_radius = 0;

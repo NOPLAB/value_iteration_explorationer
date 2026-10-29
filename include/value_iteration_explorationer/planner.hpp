@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 nop and CIT autonomous robot laboratory
 // SPDX-License-Identifier: BSD-3-Clause
 
-#ifndef VALUE_ITERATION3_PLANNER_HPP_
-#define VALUE_ITERATION3_PLANNER_HPP_
+#ifndef VALUE_ITERATION_EXPLORATIONER_PLANNER_HPP_
+#define VALUE_ITERATION_EXPLORATIONER_PLANNER_HPP_
 
 #include <atomic>
 #include <cstddef>
@@ -16,7 +16,7 @@
 #include <utility>
 #include <vector>
 
-namespace value_iteration3 {
+namespace value_iteration_explorationer {
 
 // CostAdd: 1 s base cost plus the raw cell cost. CostReplace: the raw cell cost alone.
 enum class MapType { Occupancy, CostAdd, CostReplace };
@@ -211,6 +211,6 @@ void Planner::for_rows(F fn) const {
   }
 }
 
-}  // namespace value_iteration3
+}  // namespace value_iteration_explorationer
 
 #endif

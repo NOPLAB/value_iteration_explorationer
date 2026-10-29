@@ -1,15 +1,15 @@
 // SPDX-FileCopyrightText: 2026 nop and CIT autonomous robot laboratory
 // SPDX-License-Identifier: BSD-3-Clause
 
-#ifndef VALUE_ITERATION3_ACTIONS_HPP_
-#define VALUE_ITERATION3_ACTIONS_HPP_
+#ifndef VALUE_ITERATION_EXPLORATIONER_ACTIONS_HPP_
+#define VALUE_ITERATION_EXPLORATIONER_ACTIONS_HPP_
 
-#include "value_iteration3/planner.hpp"
+#include "value_iteration_explorationer/planner.hpp"
 
 #include <string>
 #include <vector>
 
-namespace value_iteration3 {
+namespace value_iteration_explorationer {
 
 struct ActionList {
   std::vector<Action> actions;
@@ -25,6 +25,6 @@ struct ActionList {
 //     onestep_rotation_deg: 0.0
 ActionList read_action_list(const std::string &path);
 
-}  // namespace value_iteration3
+}  // namespace value_iteration_explorationer
 
 #endif

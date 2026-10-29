@@ -87,6 +87,7 @@ if(BUILD_TESTING)
       GENERATE_RESULT_FOR_RETURN_CODE_ZERO TIMEOUT 180)
   endforeach()
   ament_add_pytest_test(exploration_ros_test test/test_exploration_ros.py TIMEOUT 300)
+  ament_add_pytest_test(scan_tf_queue_ros_test test/test_scan_tf_queue_ros.py TIMEOUT 90)
   ament_add_pytest_test(action_executor_test test/test_action_executor.py
     APPEND_ENV "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/example" TIMEOUT 30)
   # Ubuntu 22.04 ships cppcheck 2.7; run its analysis rather than skip it.

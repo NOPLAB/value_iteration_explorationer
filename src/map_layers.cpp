@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: 2026 nop and CIT autonomous robot laboratory
 // SPDX-License-Identifier: BSD-3-Clause
 
-#include "value_iteration3/map_layers.hpp"
+#include "value_iteration_explorationer/map_layers.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
 
-namespace value_iteration3 {
+namespace value_iteration_explorationer {
 
 MapLayers process_map_layers(const MapGeometry &g,
                             const std::vector<std::int8_t> &occupancy,
@@ -57,6 +57,10 @@ MapLayers process_map_layers(const MapGeometry &g,
   for (std::int64_t y = 0; y < g.height; ++y) {
     for (std::int64_t x = 0; x < g.width; ++x) {
       const auto i = static_cast<std::size_t>(y) * g.width + x;
+      if (occupancy[i] == -1) {
+        layers.costmap[i] = -1;
+        continue;
+      }
       double clearance = std::min({x + 0.5, y + 0.5, g.width - x - 0.5,
                                    g.height - y - 0.5}) * g.resolution;
       for (auto by = std::max<std::int64_t>(0, y - sy);
@@ -64,7 +68,7 @@ MapLayers process_map_layers(const MapGeometry &g,
         for (auto bx = std::max<std::int64_t>(0, x - sx);
              bx <= std::min<std::int64_t>(g.width - 1, x + sx); ++bx) {
           const int raw = occupancy[static_cast<std::size_t>(by) * g.width + bx];
-          if (raw == -1 || raw > o.free_threshold) {
+          if (raw > o.free_threshold || (raw == -1 && o.inflate_around_unknown)) {
             const double dx = std::max(0.0, std::abs(static_cast<double>(x - bx)) - 0.5);
             const double dy = std::max(0.0, std::abs(static_cast<double>(y - by)) - 0.5);
             clearance = std::min(clearance, std::hypot(dx, dy) * g.resolution);
@@ -83,4 +87,4 @@ MapLayers process_map_layers(const MapGeometry &g,
   return layers;
 }
 
-}  // namespace value_iteration3
+}  // namespace value_iteration_explorationer

@@ -1,12 +1,13 @@
 /**:
   ros__parameters:
     theta_cell_num: 60
-    global_thread_num: 2
+    global_thread_num: 0  # Use every hardware thread.
     free_threshold: 49
     robot_radius: 0.15
     safety_margin: 0.05
-    inflation_radius: 0.5
+    inflation_radius: 0.2
     inflation_cost: 30
+    inflate_around_unknown: false
     unknown_value: 100
     ambiguous_value: 100
     sensor_range: 3.0
@@ -16,8 +17,12 @@
     min_gain: 0.02
     gain_reference: 1.0
     information_cost: 30.0
+    information_region_size: 0.05  # Must not exceed the map cell resolution.
+    max_observed_regions: 100000
+    max_visibility_cells: 1000000
     revisit_radius: 0.75
     revisit_angle_deg: 60.0
+    revisit_penalty: 30.0
     switch_penalty: 3.0
     goal_margin_radius: 0.3
     goal_margin_theta: 10.0

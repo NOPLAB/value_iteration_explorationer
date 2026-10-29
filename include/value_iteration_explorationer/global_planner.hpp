@@ -1,15 +1,15 @@
 // SPDX-FileCopyrightText: 2026 nop and CIT autonomous robot laboratory
 // SPDX-License-Identifier: BSD-3-Clause
 
-#ifndef VALUE_ITERATION3_GLOBAL_PLANNER_HPP_
-#define VALUE_ITERATION3_GLOBAL_PLANNER_HPP_
+#ifndef VALUE_ITERATION_EXPLORATIONER_GLOBAL_PLANNER_HPP_
+#define VALUE_ITERATION_EXPLORATIONER_GLOBAL_PLANNER_HPP_
 
-#include "value_iteration3/planner.hpp"
+#include "value_iteration_explorationer/planner.hpp"
 
 #include <atomic>
 #include <cstdint>
 
-namespace value_iteration3 {
+namespace value_iteration_explorationer {
 
 // Puts a goal on the shared field and sweeps it to convergence.
 class GlobalPlanner {
@@ -35,6 +35,6 @@ class GlobalPlanner {
   Planner &planner_;
 };
 
-}  // namespace value_iteration3
+}  // namespace value_iteration_explorationer
 
 #endif

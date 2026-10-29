@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 nop and CIT autonomous robot laboratory
 // SPDX-License-Identifier: BSD-3-Clause
 
-#include "value_iteration3/map_layers.hpp"
+#include "value_iteration_explorationer/map_layers.hpp"
 
 #include <cstdint>
 #include <exception>
@@ -13,7 +13,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "value_iteration_explorationer/msg/exploration_map.hpp"
 
-namespace value_iteration3 {
+namespace value_iteration_explorationer {
 
 class ExplorationMapNode : public rclcpp::Node {
  public:
@@ -23,6 +23,8 @@ class ExplorationMapNode : public rclcpp::Node {
     options_.safety_margin = declare_parameter<double>("safety_margin", 0.05);
     options_.inflation_radius = declare_parameter<double>("inflation_radius", 0.5);
     options_.inflation_cost = declare_parameter<int>("inflation_cost", 30);
+    options_.inflate_around_unknown =
+        declare_parameter<bool>("inflate_around_unknown", false);
     options_.unknown_value = declare_parameter<int>("unknown_value", 100);
     options_.ambiguous_value = declare_parameter<int>("ambiguous_value", 100);
     const auto topic = declare_parameter<std::string>("map_topic", "/map");
@@ -70,11 +72,11 @@ class ExplorationMapNode : public rclcpp::Node {
   rclcpp::Subscription<Grid>::SharedPtr input_;
 };
 
-}  // namespace value_iteration3
+}  // namespace value_iteration_explorationer
 
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<value_iteration3::ExplorationMapNode>());
+  rclcpp::spin(std::make_shared<value_iteration_explorationer::ExplorationMapNode>());
   rclcpp::shutdown();
   return 0;
 }

@@ -1,4 +1,4 @@
-"""Launch Cartographer and exploration using an existing robot Lua configuration."""
+"""Launch Cartographer and exploration with an overridable 2D configuration."""
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
@@ -17,12 +17,15 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             'configuration_directory',
+            default_value=PathJoinSubstitution([package_share, 'config']),
             description='Absolute directory containing the robot Cartographer Lua configuration'),
         DeclareLaunchArgument(
             'configuration_basename',
+            default_value='cartographer_2d.lua',
             description='Robot Cartographer Lua configuration filename'),
         DeclareLaunchArgument('use_sim_time', default_value='false'),
         DeclareLaunchArgument('scan_topic', default_value='/scan'),
+        DeclareLaunchArgument('cartographer_scan_topic', default_value=scan_topic),
         DeclareLaunchArgument('map_resolution', default_value='0.05'),
         DeclareLaunchArgument('map_publish_period_sec', default_value='1.0'),
         DeclareLaunchArgument('action_topic', default_value='/exploration/action'),
@@ -50,7 +53,10 @@ def generate_launch_description():
                 '-configuration_directory', LaunchConfiguration('configuration_directory'),
                 '-configuration_basename', LaunchConfiguration('configuration_basename'),
             ],
-            remappings=[('scan', scan_topic)],
+            remappings=[
+                ('scan', LaunchConfiguration('cartographer_scan_topic')),
+                ('odom', LaunchConfiguration('odom_topic')),
+            ],
         ),
         Node(
             package='cartographer_ros',

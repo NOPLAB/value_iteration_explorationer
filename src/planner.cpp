@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 nop and CIT autonomous robot laboratory
 // SPDX-License-Identifier: BSD-3-Clause
 
-#include "value_iteration3/planner.hpp"
+#include "value_iteration_explorationer/planner.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -16,7 +16,7 @@
 #include <intrin.h>
 #endif
 
-namespace value_iteration3 {
+namespace value_iteration_explorationer {
 namespace {
 
 constexpr double kPi = 3.14159265358979323846;
@@ -916,4 +916,4 @@ std::string Planner::audit() const {
   return {};
 }
 
-}  // namespace value_iteration3
+}  // namespace value_iteration_explorationer

@@ -1,7 +1,8 @@
 # value_iteration_explorationer
 
 Exploration fork of [NOPLAB/value_iteration3_cpp](https://github.com/NOPLAB/value_iteration3_cpp).
-Header paths and the `value_iteration3` C++ namespace are retained from upstream.
+The ROS package, header paths (`value_iteration_explorationer/*.hpp`), and C++
+namespace are `value_iteration_explorationer`.
 The action parser, local planner, original solver tests, and goal-driven node
 remain; exploration uses the same solver and `cost_add`.
 
@@ -25,9 +26,15 @@ Cartographer /map
 The costmap uses the original `cost_add` contract:
 `-1` is blocked; `0..100` is extra cost in seconds, added to the solver's 1 second
 base cost. **100 is traversable, not a lethal-cost sentinel.** The map producer
-blocks unknown cells and cells above `free_threshold`, inflates them by
-`robot_radius + safety_margin`, and adds soft clearance costs. The robot is
-modeled as a circle; map exterior also constrains its footprint.
+blocks unknown cells and cells above `free_threshold`. Known obstacles are
+inflated by `robot_radius + safety_margin`, with soft clearance costs out to
+`inflation_radius`. Unknown cells are not inflation sources by default:
+`inflate_around_unknown: true` restores inflation around them. Unknown cells
+themselves remain blocked in either mode; the robot's outer footprint can overlap
+unknown space when that inflation is disabled. No robot-position cell is
+unconditionally cleared. The robot is modeled as a circle; map exterior also
+constrains its footprint. The shipped radii are 0.15 m plus 0.05 m safety margin,
+and 0.2 m outer inflation, so no additional soft-cost band remains at those settings.
 The default `free_threshold` is 49. Initial online Cartographer maps can have
 free cells around 35 rather than 0, so a threshold of 25 can block free space.
 Values 50 and above remain blocked.
@@ -38,15 +45,18 @@ cost. Unknown cells receive `unknown_value`. Known cells receive
 occupancy ambiguity, not Cartographer localization confidence or observation
 count. It uses a fixed scale, not normalization against each map's maximum.
 
-The planner evaluates reachable free observation poses, counts weighted visible
-information within `sensor_range` and `sensor_fov_deg`, and uses
+The planner evaluates reachable free observation poses, counts weighted **new**
+visible information within `sensor_range` and `sensor_fov_deg`, and uses
 `information_cost * (1 - min(gain/gain_reference, 1))` as a terminal cost.
 Gain is in square meters weighted by information/100 and distance. Raw occupancy
 stops visibility rays; the inflated costmap controls robot motion. Only the
-first unknown/ambiguous boundary is visible, not the unknown space behind it.
+first unknown/occupied boundary is visible, not the space behind it
+(`free_threshold` determines which known occupancy values block a ray).
 Observation terminals have `observation_radius` spatial extent, as the original
-goal margins do, to accommodate stochastic successor cells. This is a local
-approximation to observation gain over that region.
+goal margins do, to accommodate stochastic successor cells. Each expanded
+terminal cell uses its own occlusion-checked view, not a nearby pose's footprint.
+This is an area/interest heuristic, not exact mutual information, a Bayesian
+sensor model, or a guarantee that an observation reduces SLAM uncertainty.
 
 ### Exploration with a goal
 
@@ -79,21 +89,97 @@ A new goal replaces the old one, cancels its pending solve, and stops action
 output until the replacement field is ready. Invalid goals leave the current
 goal unchanged.
 
-Recent observation poses are suppressed within `revisit_radius` and
-`revisit_angle_deg` for `revisit_cooldown` seconds. Observations are recorded
-while moving; arrival does not start a timed observation stop or wait for a map.
-Exploration also selects a value-based action at an observation terminal, so
-reaching one only updates observation history and does not itself emit a stop.
-Lack of translation or rotation for `progress_timeout` suppresses the current
-target and requests another plan. `switch_penalty` favors the previous target
-when nominal rollout identifies one. History is bounded to 256 observations.
-`no_candidates` does not claim the entire environment is mapped; cooldowns,
-visibility limits, or disconnected space can leave unexplored regions.
+### Observed information regions
+
+Prediction does not consume information. Only accepted, fresh scans with an
+acquisition-time transform record evidence. Each finite range inside the scan's
+range limits traverses touched map cells up to that measured return, capped by
+`sensor_range`; a mapped obstacle or the first unknown cell ends traversal sooner.
+Nothing behind a measured return, mapped obstacle, or unknown boundary is
+consumed. Invalid, infinite, zero-length, and out-of-range returns record no evidence. A scan
+older than its map snapshot cannot consume newly published interest.
+
+The shipped planning FOV is 180 degrees, but **actual LDS coverage is not clipped
+to that FOV**: a valid rear return from a 360-degree LDS also records evidence.
+Prediction remains a heading-dependent 180-degree view; it does not claim to
+predict the exact utility of a full LDS scan. Sparse beams may leave interest
+between rays unconsumed, and interest consumption is an observation proxy, not
+proof of an occupancy-estimation improvement.
+
+Evidence is keyed by world-aligned regions of `information_region_size` (0.05 m).
+This must not exceed the map cell resolution; larger settings reject the map to
+avoid merging unseen cells with observed ones. Integer origin shifts and map
+growth retain evidence for the same world regions. Fractional shifts use the
+same world quantization and current cell signature, an approximation rather than
+exact continuous-area overlap. Frame/resolution changes clear evidence.
+A region is consumed only while both its raw occupancy and information values
+match the observed signature. Any change makes it eligible again, including an
+interest decrease; reverting to an old value does not revive invalidated evidence.
+Thus noisy changing maps may deliberately cause re-observation.
+
+The same robot pose can remain useful when it sees new regions; a different
+pose gets no credit for interest already observed elsewhere. Partially overlapping
+views retain only their new gain, raising their terminal cost; views below
+`min_gain` are removed. Repeated identical scans do not stack consumption.
+`max_observed_regions` (100000) bounds FIFO evidence storage. Eviction permits
+re-exploration; evidence does not expire merely because the robot stayed still.
+`max_visibility_cells` (1000000) bounds the cached footprint cells shared across
+headings. Geometry visits nearby terminal positions first; budget exhaustion
+omits farther views and sets `visibility_truncated` in diagnostics.
+A limit smaller than one complete view can leave no observation candidates;
+truncation can defer distant frontiers and is not a coverage guarantee.
+
+An absorbing observation terminal has no invented outgoing action. It waits for
+actual evidence and the ordinary warm-field repair, then follows the remaining
+policy or stops if no candidates remain. Independent goal terminals are never
+consumed by observation evidence.
+
+Lack of progress for `progress_timeout` penalizes the attempted target and requests
+another plan; failure does not claim an observation. The existing `revisit_penalty`,
+`revisit_radius`, `revisit_angle_deg`, and `revisit_cooldown` parameters now apply
+only to failed attempts (bounded to 256 entries), with a bounded distance/angle
+gradient and no stacking of duplicate failures. `progress_distance` still
+controls movement-progress detection. `switch_penalty` favors the previous target
+when nominal rollout identifies one.
+`no_candidates` does not claim the entire environment is mapped; visibility
+limits or disconnected space can leave unexplored regions.
+
+`/exploration/status` distinguishes `robot_blocked`, `robot_outside_map`,
+`no_candidates`, and `unreachable` from `waiting_input`. An occupied start is not
+reported as a revisit wait. `/exploration/diagnostics` is a transient-local
+`std_msgs/String` containing JSON for the last completed plan: `plan_status`,
+`plan_sequence`, `map_revision`, robot cell coordinates, `raw_occupancy`,
+`movement_cost`, `terminal_count`, `observed_region_count`, `visibility_truncated`,
+`accepted_scan_stamp_ns`, and `failure_history_size`. The legacy
+`observation_history_size` field is now an alias for the stored region count,
+not a count of robot visits or evidence that all those signatures remain current.
+Cell values are null outside the map. Read it with:
+
+```bash
+ros2 topic echo /exploration/diagnostics --once --qos-durability transient_local
+```
+
+This is a plan snapshot; `/exploration/status` remains the live execution state.
 
 Map updates are coalesced, not queued. The value field is refreshed every
-`replan_interval`, including when no new map or arrival event occurs. Actions
+`replan_interval`, including when no new map or arrival event occurs.
+The default `global_thread_num: 0` uses all hardware threads available to WSL
+for value iteration; a positive value selects a fixed worker count.
+Actions
 continue from the latest immutable field snapshot while the worker updates it;
 each action is checked against the newest costmap and scan. Working values are
+updated from cached observation candidates when an observation is consumed.
+Expensive visibility generation runs on a separate thread; its result is paired
+with its source map and filtered against the latest region evidence before
+installation. Changed rasters cancel stale geometry and solves; header-only
+refreshes can reuse identical geometry. Scan evidence is applied only to the
+snapshot it sampled. Consumption filters cached support without raycasting on
+control ticks and cancels an older solve. Ordinary states continue using
+the last valid policy; an absorbing observation state waits for its support to
+be consumed rather than executing an invented outgoing action.
+The controller retains the accepted immutable snapshot until a matching solve
+finishes; intermediate preview snapshots cannot temporarily erase its action.
+Working values are
 retained across aligned map updates, including integer-cell origin shifts and
 map growth. Added obstacles, increased costs and removed observation terminals
 invalidate their old dependent values before propagation. A changed resolution
@@ -103,10 +189,38 @@ intermediate snapshot between sweeps every 100 ms. Transition
 tables are reused when raster geometry is unchanged. Swept translations are
 checked in exploration mode so an action cannot jump over blocked cells.
 Fresh scans update the original local penalties and independently veto unsafe
-actions. Missing/stale TF, scans, or map stop action output. Inflation and scan
+actions. Exploration inflates live scan hits by `robot_radius + safety_margin`,
+matching its execution clearance instead of using a fixed two-cell footprint.
+If the robot already lies inside that clearance, a translation is permitted only
+when distance from every close return strictly increases throughout the sweep.
+Rotation in place, moving closer, and entering another return's clearance remain
+blocked. Occupied/unknown map cells remain impassable.
+Missing/stale TF, scans, or map stop action output. Inflation and scan
 checks use the same circular footprint parameters.
-Scan-time TF lookup waits up to 0.1 seconds for the SLAM transform to arrive,
-instead of discarding fresh scans whose transform follows by a few milliseconds.
+Scan messages are held in a bounded TF message filter until their acquisition-time
+transform arrives. Transform waiting does not block control callbacks or discard
+an otherwise fresh scan after an arbitrary 0.1-second wait. Input freshness
+limits are unchanged; `waiting_transform` and `waiting_scan` identify these states.
+
+For an offline observable check after building, run:
+
+```bash
+colcon test --packages-select value_iteration_explorationer \
+  --ctest-args -R exploration_ros_test --output-on-failure
+colcon test-result --verbose
+```
+
+`test_measured_return_and_changed_map_reopen_same_pose` launches only map/planner
+nodes with unique remapped topics and synthetic static TF/360-degree scans; it
+does not launch an executor or actuate a robot. It places one interest cell
+0.30 m ahead. Returns at 0.20 m leave predicted candidates unconsumed; long returns
+at 5.0 m (evidence capped at the configured 0.60 m) remove all overlapping views.
+With TF unchanged, changing that
+cell's occupancy reopens candidates on the new map revision; a new long scan
+consumes them again and action output is zero. Event futures verify each stage
+without fixed sleeps. The native `exploration_test` covers occlusion, overlapping
+views, new interest at the same pose, world origin/growth, bounded caches, and
+delayed cached candidates as well.
 
 Two map topics are published for inspection, but the planner consumes only
 `ExplorationMap` on `/exploration/map_layers` so it cannot mix revisions.
@@ -142,29 +256,44 @@ For Cartographer and exploration together:
 
 ```bash
 ros2 launch value_iteration_explorationer cartographer_exploration.launch.py \
-  configuration_directory:=/absolute/path/to/your/cartographer/config \
-  configuration_basename:=your_robot.lua \
   scan_topic:=/scan use_sim_time:=false
 ```
 
 The source example is `example/cartographer_exploration.launch.py`. It requires
-`cartographer_ros` and an existing robot-specific Lua configuration, and starts
-both Cartographer and its occupancy-grid node. Sensors, robot TF and any odometry
-required by that Lua configuration must already be running. Optional arguments
-include `map_resolution`, `map_publish_period_sec`, `params_file`, and
-`action_topic`. It does not invent a robot sensor configuration.
+`cartographer_ros` and starts both Cartographer and its occupancy-grid node.
+The default `config/cartographer_2d.lua` uses one 2D laser scan, tracks `base_link`,
+and publishes `map -> odom`. It consumes `/odom` as well as the scan, but not IMU.
+Pose publication uses the scan-time estimate (`use_pose_extrapolator = false`)
+so the tracking pose and external-odometry transform refer to the same time.
+The robot must already provide odometry, `odom -> base_link`, and the sensor TF.
+The `odom_topic` argument selects odometry for both Cartographer and the executor.
+Override `configuration_directory` and `configuration_basename` to use a
+robot-specific Lua configuration. Optional arguments include `map_resolution`,
+`map_publish_period_sec`, `params_file`, and `action_topic`.
 This example also starts RViz with `example/exploration.rviz`: map, robot, scan,
 and policy rollout are visible; the two derived maps, value field and candidates
 can be toggled in Displays. Set `use_rviz:=false` for headless use, or pass
 `rviz_config:=/absolute/path/to/your.rviz`. The regular exploration launch does
 not start RViz.
-For simulation, `execute_actions:=true use_sim_time:=true` starts the optional
-`example_action_executor`. It uses `/odom` feedback to execute each translation
+`execute_actions:=true` starts the optional `example_action_executor`. Use
+`use_sim_time:=false` for a real robot, or `use_sim_time:=true` for simulation.
+It uses `/odom` feedback to execute each translation
 then rotation, limits velocities, and stops on zero/stale actions, stale odometry
-or scan, or insufficient laser clearance. It continues accepting actions after
-each step; there is no measurement-success auto-stop. `odom_topic` and
-`cmd_vel_topic` are configurable. This executor is simulator-only and is off by
-default; a real robot still needs its own compatible controller.
+or scan, or insufficient laser clearance. Ordinary nonzero policy changes are
+queued until the current translation/rotation primitive completes, matching the
+solver's transition model instead of repeatedly resetting a partly executed step.
+The latest pending primitive starts without an intermediate zero command.
+Zero commands and stale/unsafe input cancel both active and pending motion
+immediately; there is no measurement-success auto-stop. `odom_topic` and
+`cmd_vel_topic` are configurable. The executor is off by default. For a real
+robot, set `ROS_DOMAIN_ID` to match the robot's other ROS 2 nodes (30 is an
+example):
+
+```bash
+export ROS_DOMAIN_ID=30
+ros2 launch value_iteration_explorationer cartographer_exploration.launch.py \
+  use_sim_time:=false execute_actions:=true scan_topic:=/scan
+```
 
 ### Tests and retained code
 

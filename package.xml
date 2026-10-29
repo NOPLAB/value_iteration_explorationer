@@ -3,7 +3,7 @@
 <package format="3">
   <name>value_iteration_explorationer</name>
   <version>0.1.0</version>
-  <description>Costmap-based value iteration exploration, copied from value_iteration3</description>
+  <description>Occlusion-aware information-region exploration using costmap-based value iteration</description>
   <maintainer email="noplab90@gmail.com">nop</maintainer>
   <license>BSD-3-Clause</license>
 

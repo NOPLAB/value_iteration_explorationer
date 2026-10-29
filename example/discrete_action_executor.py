@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 nop and CIT autonomous robot laboratory
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Continuous simulator-only execution of the planner's discrete actions."""
+"""Continuous execution of the planner's discrete actions using odometry feedback."""
 
 import math
 import signal
@@ -60,8 +60,6 @@ class ActionExecutor(Node):
 
     def __init__(self) -> None:
         super().__init__("example_action_executor")
-        if not self.get_parameter("use_sim_time").value:
-            raise RuntimeError("This example executor requires use_sim_time:=true")
         self.max_linear = self.declare_parameter("max_linear", 0.12).value
         self.max_angular = self.declare_parameter("max_angular", 0.5).value
         self.action_timeout = self.declare_parameter("action_timeout", 0.35).value
@@ -74,6 +72,7 @@ class ActionExecutor(Node):
         self.pose: Pose2 | None = None
         self.start: Pose2 | None = None
         self.motion: tuple[float, float] | None = None
+        self.pending_motion: tuple[float, float] | None = None
         self.turning = False
         self.action_stamp = float("-inf")
         self.odom_stamp = float("-inf")
@@ -103,11 +102,17 @@ class ActionExecutor(Node):
         self.action_stamp = self.seconds()
         if desired == (0.0, 0.0) or not all(math.isfinite(value) for value in desired):
             self.motion = None
+            self.pending_motion = None
             self.output.publish(Twist())
-        elif self.pose is not None and desired != self.motion:
-            self.motion = desired
-            self.start = self.pose
-            self.turning = abs(desired[0]) < 0.001
+        else:
+            self.pending_motion = desired
+            if self.pose is not None and self.motion is None:
+                self.begin_step(desired, self.pose)
+
+    def begin_step(self, motion: tuple[float, float], pose: Pose2) -> None:
+        self.motion = motion
+        self.start = pose
+        self.turning = abs(motion[0]) < 0.001
 
     def on_odom(self, message: Odometry) -> None:
         pose = message.pose.pose
@@ -130,6 +135,7 @@ class ActionExecutor(Node):
         output = Twist()
         now = self.seconds()
         if (self.pose is not None and self.start is not None and self.motion is not None
+                and self.pending_motion is not None
                 and 0 <= now - self.action_stamp <= self.action_timeout
                 and 0 <= now - self.odom_stamp <= self.input_timeout
                 and 0 <= now - self.scan_stamp <= self.input_timeout
@@ -137,11 +143,17 @@ class ActionExecutor(Node):
             command = step_command(
                 self.start, self.pose, *self.motion, self.turning,
                 self.max_linear, self.max_angular)
-            self.turning = command.turning
             if command.complete:
-                self.motion = None
+                self.begin_step(self.pending_motion, self.pose)
+                command = step_command(
+                    self.start, self.pose, *self.motion, self.turning,
+                    self.max_linear, self.max_angular)
+            self.turning = command.turning
             output.linear.x = command.linear
             output.angular.z = command.angular
+        else:
+            self.motion = None
+            self.pending_motion = None
         self.output.publish(output)
 
 

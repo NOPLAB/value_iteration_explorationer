@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: 2026 nop and CIT autonomous robot laboratory
 // SPDX-License-Identifier: BSD-3-Clause
 
-#include "value_iteration3/global_planner.hpp"
+#include "value_iteration_explorationer/global_planner.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <sstream>
 #include <string>
 
-namespace value_iteration3 {
+namespace value_iteration_explorationer {
 namespace {
 constexpr std::uint64_t kUnreached = ~std::uint64_t{0};
 }
@@ -256,4 +256,4 @@ void GlobalPlanner::warn_unreached() const {
   }
 }
 
-}  // namespace value_iteration3
+}  // namespace value_iteration_explorationer
